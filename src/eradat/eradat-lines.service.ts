@@ -32,22 +32,28 @@ export class EradatLinesService {
     private readonly enrollmentService: EnrollmentService,
   ) {}
 
+  // Two round trips, each a few queries side by side: the window and the
+  // page of enrollments, then the page's contributors and payments. Done one
+  // after another these were five, and this is the request every grid waits
+  // on. A page read for a program that turns out not to exist is discarded.
   async getEnrollmentLines(
     programId: string,
     { year: requested, ...listQuery }: LinesQueryDto,
   ) {
-    const window = await this.windowService.resolve(programId, requested);
-    const { rows, nextCursor } =
-      await this.enrollmentService.listEnrollmentRows(programId, listQuery);
-    const contributorIds = rows.map((row) => row.contributorId);
+    const [window, { rows: pageRows, nextCursor }] = await Promise.all([
+      this.windowService.resolve(programId, requested),
+      this.enrollmentService.listEnrollmentPage(programId, listQuery),
+    ]);
+    const contributorIds = pageRows.map((row) => row.contributorId);
+    const withContributors =
+      this.enrollmentService.attachContributors(pageRows);
 
     let items;
     if (window.program.entryMode === 'MONTHLY') {
-      const cells = await this.loadContributorCells(
-        programId,
-        contributorIds,
-        window,
-      );
+      const [rows, cells] = await Promise.all([
+        withContributors,
+        this.loadContributorCells(programId, contributorIds, window),
+      ]);
       items = rows.map((row) => ({
         ...toEnrollmentView(row),
         ...buildGridLine(
@@ -58,11 +64,10 @@ export class EradatLinesService {
         ),
       }));
     } else {
-      const sums = await this.loadContributorYearSums(
-        programId,
-        contributorIds,
-        window,
-      );
+      const [rows, sums] = await Promise.all([
+        withContributors,
+        this.loadContributorYearSums(programId, contributorIds, window),
+      ]);
       items = rows.map((row) => ({
         ...toEnrollmentView(row),
         ...buildLedgerLine(
@@ -85,28 +90,32 @@ export class EradatLinesService {
     const window = await this.windowService.resolve(programId, year);
     this.assertEntryMode(window.program, 'MONTHLY');
 
-    const cells = await this.prisma.payment.findMany({
-      where: {
-        programId,
-        payerProgramId: { not: null },
-        year: this.windowRange(window),
-      },
-      select: {
-        ...PAYMENT_CELL_SELECT,
-        payerProgramId: true,
-        // Not soft-delete filtered: a payer deleted since is still named.
-        payerProgram: { select: { name: true, isProtected: true } },
-      },
-      // Bounded by construction — one cell per paying program per month —
-      // but stated so a broken unique index cannot turn this into a scan.
-      take: PROGRAM_CAP * window.years.length * 12,
-    });
+    const range = this.windowRange(window);
+    const [cells, payers] = await Promise.all([
+      this.prisma.payment.findMany({
+        where: { programId, payerProgramId: { not: null }, year: range },
+        select: { ...PAYMENT_CELL_SELECT, payerProgramId: true },
+        // Bounded by construction — one cell per paying program per month —
+        // but stated so a broken unique index cannot turn this into a scan.
+        take: PROGRAM_CAP * window.years.length * 12,
+      }),
+      // The paying programs, found by the same filter through the relation
+      // so this runs beside the cells instead of after them. The unfiltered
+      // client: a payer deleted since is still named.
+      this.prisma.raw.program.findMany({
+        where: { paymentsMade: { some: { programId, year: range } } },
+        select: { id: true, name: true, isProtected: true },
+        take: PROGRAM_CAP,
+      }),
+    ]);
+    const payerById = new Map(payers.map(({ id, ...payer }) => [id, payer]));
 
     const byPayer = new Map<
       string,
       { name: string; isProtected: boolean; cells: PaymentCellRow[] }
     >();
-    for (const { payerProgramId, payerProgram, ...cell } of cells) {
+    for (const { payerProgramId, ...cell } of cells) {
+      const payerProgram = payerProgramId && payerById.get(payerProgramId);
       if (!payerProgramId || !payerProgram) continue;
       const line = byPayer.get(payerProgramId);
       if (line) line.cells.push(cell);

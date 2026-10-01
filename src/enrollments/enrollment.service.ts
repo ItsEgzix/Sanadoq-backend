@@ -6,6 +6,7 @@ import {
   isForeignKeyViolation,
   isUniqueViolation,
 } from 'src/common/utils/prisma-error.util';
+import { CONTRIBUTOR_SELECT } from 'src/contributors/contributor.constant';
 import { ContributorService } from 'src/contributors/contributor.service';
 import { ProgramService } from 'src/programs/program.service';
 import { PrismaService } from 'src/prisma/prisma.service';
@@ -13,8 +14,10 @@ import type { CreateEnrollmentDto } from './dto/create-enrollment.dto';
 import type { ListEnrollmentsQueryDto } from './dto/list-enrollments-query.dto';
 import type { UpdateEnrollmentDto } from './dto/update-enrollment.dto';
 import {
+  ENROLLMENT_FIELDS_SELECT,
   ENROLLMENT_ORDER_BY,
   ENROLLMENT_SELECT,
+  type EnrollmentFieldsRow,
   type EnrollmentRow,
 } from './enrollment.constant';
 import { toEnrollmentView } from './enrollment.util';
@@ -39,17 +42,15 @@ export class EnrollmentService {
   ) {}
 
   /**
-   * One cursor page of a program's enrollments; the grid adds payment cells
-   * to these. The caller has already resolved the program.
-   *
-   * Enrollments never point at a deleted contributor by construction:
-   * deleting a contributor is refused while they have any, and a merge moves
-   * them first — so no contributor filter is needed here.
+   * One cursor page of a program's enrollments, without their contributors —
+   * attachContributors adds those, so the grid can load them beside its
+   * payment cells. Does not check the program: callers resolve it, usually
+   * in parallel with this.
    */
-  async listEnrollmentRows(
+  async listEnrollmentPage(
     programId: string,
     { cursor, limit, status, q }: ListEnrollmentsQueryDto,
-  ): Promise<{ rows: EnrollmentRow[]; nextCursor: string | null }> {
+  ): Promise<{ rows: EnrollmentFieldsRow[]; nextCursor: string | null }> {
     // One extra row says whether another page exists without a count().
     const found = await this.prisma.programEnrollment.findMany({
       where: {
@@ -60,30 +61,65 @@ export class EnrollmentService {
       orderBy: ENROLLMENT_ORDER_BY,
       take: limit + 1,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-      select: ENROLLMENT_SELECT,
+      select: ENROLLMENT_FIELDS_SELECT,
     });
     const hasMore = found.length > limit;
     const rows = hasMore ? found.slice(0, limit) : found;
     return { rows, nextCursor: hasMore ? rows[rows.length - 1].id : null };
   }
 
-  async listEnrollments(programId: string, query: ListEnrollmentsQueryDto) {
-    await this.programService.assertProgramExists(programId);
-    const { rows, nextCursor } = await this.listEnrollmentRows(
-      programId,
-      query,
-    );
-    return { items: rows.map(toEnrollmentView), nextCursor };
+  /**
+   * The rows of one page with their contributors, as the nested
+   * ENROLLMENT_SELECT would return them.
+   *
+   * The unfiltered client, like the nested select it replaces: an
+   * enrollment's contributor is live by construction — deleting a contributor
+   * is refused while they have any, and a merge moves them first — so this
+   * reads by foreign key, never a list that could surface deleted rows.
+   */
+  async attachContributors(
+    rows: EnrollmentFieldsRow[],
+  ): Promise<EnrollmentRow[]> {
+    if (rows.length === 0) return [];
+    const ids = [...new Set(rows.map((row) => row.contributorId))];
+    const contributors = await this.prisma.raw.contributor.findMany({
+      where: { id: { in: ids } },
+      select: CONTRIBUTOR_SELECT,
+      take: ids.length,
+    });
+    const byId = new Map(contributors.map((c) => [c.id, c]));
+    return rows.map((row) => {
+      const contributor = byId.get(row.contributorId);
+      // The FK (Restrict) makes this unreachable; failing loudly beats
+      // rendering a line with no name.
+      if (!contributor) {
+        throw new Error(
+          `Enrollment ${row.id} points at missing contributor ${row.contributorId}`,
+        );
+      }
+      return { ...row, contributor };
+    });
   }
 
-  /** The contributor's enrollment in the program, or ENROLLMENT_NOT_FOUND. */
+  async listEnrollments(programId: string, query: ListEnrollmentsQueryDto) {
+    const [, page] = await Promise.all([
+      this.programService.assertProgramExists(programId),
+      this.listEnrollmentPage(programId, query),
+    ]);
+    const rows = await this.attachContributors(page.rows);
+    return { items: rows.map(toEnrollmentView), nextCursor: page.nextCursor };
+  }
+
+  /** Throws ENROLLMENT_NOT_FOUND unless the contributor is enrolled in the program. */
   async assertEnrolled(
     programId: string,
     contributorId: string,
-  ): Promise<EnrollmentRow> {
+  ): Promise<void> {
+    // Only the id: the payment path needs to know the enrollment exists, and
+    // a nested contributor select would cost it a second round trip.
     const enrollment = await this.prisma.programEnrollment.findUnique({
       where: { contributorId_programId: { contributorId, programId } },
-      select: ENROLLMENT_SELECT,
+      select: { id: true },
     });
     if (!enrollment) {
       throw new AppException(
@@ -92,7 +128,6 @@ export class EnrollmentService {
         HttpStatus.NOT_FOUND,
       );
     }
-    return enrollment;
   }
 
   async createEnrollment(programId: string, dto: CreateEnrollmentDto) {

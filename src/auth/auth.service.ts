@@ -13,6 +13,12 @@ import { TokenService } from './token.service';
 
 // What a session needs to know about its user. passwordHash and tokenVersion
 // are read for the checks below and stripped before anything is returned.
+const SESSION_ROLE_SELECT = {
+  key: true,
+  name: true,
+  permissions: true,
+} satisfies Prisma.RoleSelect;
+
 const SESSION_USER_SELECT = {
   id: true,
   email: true,
@@ -20,8 +26,11 @@ const SESSION_USER_SELECT = {
   isActive: true,
   tokenVersion: true,
   passwordHash: true,
-  role: { select: { key: true, name: true, permissions: true } },
+  role: { select: SESSION_ROLE_SELECT },
 } satisfies Prisma.UserSelect;
+
+// SESSION_USER_SELECT without the role, for findSessionUser's parallel read.
+const { role: _role, ...SESSION_USER_FIELDS_SELECT } = SESSION_USER_SELECT;
 
 type SessionUserRow = Prisma.UserGetPayload<{
   select: typeof SESSION_USER_SELECT;
@@ -57,10 +66,7 @@ export class AuthService {
   ) {}
 
   async login(dto: LoginDto) {
-    const user = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-      select: SESSION_USER_SELECT,
-    });
+    const user = await this.findSessionUser({ email: dto.email });
     if (!user) {
       // Same CPU as a real check, so an unknown email answers as slowly as a
       // wrong password and the account list cannot be probed by timing.
@@ -119,10 +125,11 @@ export class AuthService {
   }
 
   async me(userId: string): Promise<SessionUser> {
-    const user = await this.prisma.user.findUniqueOrThrow({
-      where: { id: userId },
-      select: SESSION_USER_SELECT,
-    });
+    const user = await this.findSessionUser({ id: userId });
+    // AuthGuard has already found this user; gone since is a dead session.
+    if (!user) {
+      throw new AppException('AUTH_TOKEN_INVALID', {}, HttpStatus.UNAUTHORIZED);
+    }
     return toSessionUser(user);
   }
 
@@ -159,13 +166,31 @@ export class AuthService {
     if (!refreshToken) return null;
     const claims = await this.tokens.verify(refreshToken, 'refresh');
     if (!claims) return null;
-    const user = await this.prisma.user.findUnique({
-      where: { id: claims.sub },
-      select: SESSION_USER_SELECT,
-    });
+    const user = await this.findSessionUser({ id: claims.sub });
     // A version mismatch is a session ended by logout, a password change or
     // deactivation.
     return user && user.tokenVersion === claims.ver ? user : null;
+  }
+
+  // The SESSION_USER_SELECT row, read as two queries side by side: Prisma
+  // runs a nested role select second, after the user's, and /auth/refresh
+  // sits in front of every page load.
+  private async findSessionUser(
+    where: { id: string } | { email: string },
+  ): Promise<SessionUserRow | null> {
+    const [user, role] = await Promise.all([
+      this.prisma.user.findUnique({
+        where,
+        select: SESSION_USER_FIELDS_SELECT,
+      }),
+      this.prisma.role.findFirst({
+        where: { users: { some: where } },
+        select: SESSION_ROLE_SELECT,
+      }),
+    ]);
+    // roleKey is a required FK with Restrict, so a user always has a role; a
+    // missing one means the user vanished between the two reads.
+    return user && role ? { ...user, role } : null;
   }
 
   private async issueSession(user: SessionUserRow): Promise<IssuedSession> {

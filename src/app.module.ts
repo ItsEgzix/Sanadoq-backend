@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
 import { AcceptLanguageResolver, I18nModule, QueryResolver } from 'nestjs-i18n';
 import { ZodValidationPipe } from 'nestjs-zod';
+import { AccessCheckInterceptor } from './auth/access-check.interceptor';
 import { AuthModule } from './auth/auth.module';
 import { AuthGuard } from './auth/guards/auth.guard';
 import { validateEnv } from './common/config/env.schema';
@@ -58,6 +59,9 @@ import { UserModule } from './users/user.module';
     // its body is even parsed.
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_FILTER, useClass: HttpExceptionFilter },
+    // First, so it is the outermost: on reads it holds the response until
+    // AuthGuard's account check has passed — see AccessCheckInterceptor.
+    { provide: APP_INTERCEPTOR, useClass: AccessCheckInterceptor },
     { provide: APP_INTERCEPTOR, useClass: ResponseTransformInterceptor },
   ],
 })

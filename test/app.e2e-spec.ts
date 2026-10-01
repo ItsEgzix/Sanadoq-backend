@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
+import { TokenService } from './../src/auth/token.service';
 
 /**
  * Wiring that unit tests cannot see: the global AuthGuard, Zod pipe,
@@ -79,5 +80,45 @@ describe('App wiring (e2e)', () => {
       .expect(401);
     expect(byQuery.body.message).toBe('هذا العنوان غير موجود.');
     expect(byHeader.body.message).toBe('سجّل الدخول للمتابعة.');
+  });
+
+  // On reads the account check runs beside the handler (AuthGuard) and
+  // AccessCheckInterceptor holds the answer. A correctly signed token for an
+  // account that does not exist is the revoked-token case end to end.
+  describe('a read with a signed token for no live account', () => {
+    let token: string;
+
+    beforeAll(async () => {
+      token = await app
+        .get(TokenService)
+        .signAccessToken('00000000-0000-4000-8000-000000000000', 0);
+    });
+
+    it('gets the auth error, not the data the handler produced', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/programs')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(401);
+      expect(res.body.errorCode).toBe('AUTH_TOKEN_INVALID');
+      expect(Array.isArray(res.body)).toBe(false);
+    });
+
+    it('gets the auth error, not the handler’s 404 for an unknown id', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/programs/00000000-0000-4000-8000-000000000001/summary')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(401);
+      expect(res.body.errorCode).toBe('AUTH_TOKEN_INVALID');
+    });
+
+    it('is refused before the handler on a write, as before', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/programs')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: '' })
+        .expect(401);
+      // AUTH_TOKEN_INVALID, not VALIDATION_FAILED: the guard ran first.
+      expect(res.body.errorCode).toBe('AUTH_TOKEN_INVALID');
+    });
   });
 });

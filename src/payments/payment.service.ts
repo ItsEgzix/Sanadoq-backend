@@ -89,9 +89,7 @@ export class PaymentService {
     dto: RecordPaymentDto,
   ) {
     const year = dto.paymentDate.getUTCFullYear();
-    const { program } = await this.cycleService.resolveWindow(programId, year);
-    this.assertEntryMode(program, 'DATED');
-    await this.assertPayer(programId, dto.payer);
+    await this.assertWritable(programId, year, 'DATED', dto.payer);
 
     try {
       const payment = await this.prisma.payment.create({
@@ -119,12 +117,20 @@ export class PaymentService {
   }
 
   async deletePayment(programId: string, paymentId: string) {
-    // month NULL: monthly cells are cleared through their cell URL, where the
-    // payer and month are explicit.
-    const payment = await this.prisma.payment.findFirst({
-      where: { id: paymentId, programId, month: null },
-      select: { year: true },
-    });
+    // Side by side: the entry and the program's window. The entry's year is
+    // checked against the window once both are in.
+    const [found, window] = await Promise.allSettled([
+      // month NULL: monthly cells are cleared through their cell URL, where
+      // the payer and month are explicit.
+      this.prisma.payment.findFirst({
+        where: { id: paymentId, programId, month: null },
+        select: { year: true },
+      }),
+      this.cycleService.resolveWindow(programId),
+    ]);
+    // An entry in a missing program cannot be found, so its 404 answers first.
+    if (found.status === 'rejected') throw found.reason;
+    const payment = found.value;
     if (!payment) {
       throw new AppException(
         'PAYMENT_NOT_FOUND',
@@ -132,8 +138,10 @@ export class PaymentService {
         HttpStatus.NOT_FOUND,
       );
     }
+    if (window.status === 'rejected') throw window.reason;
     // The same cycle fence as writing it.
-    await this.cycleService.resolveWindow(programId, payment.year);
+    const { cycle } = window.value;
+    if (cycle) this.cycleService.assertYearInCycle(cycle, payment.year);
 
     // Hard delete, like clearing a cell: a wrong entry is removed so every
     // total drops it at once. An audit trail of corrections is not built yet.
@@ -166,9 +174,31 @@ export class PaymentService {
     payer: CellPayer,
     year: number,
   ): Promise<void> {
-    const { program } = await this.cycleService.resolveWindow(programId, year);
-    this.assertEntryMode(program, 'MONTHLY');
-    await this.assertPayer(programId, payer);
+    await this.assertWritable(programId, year, 'MONTHLY', payer);
+  }
+
+  /**
+   * The checks in front of every payment write: the program exists, keeps
+   * this entry mode and its current cycle holds the year; and the payer is
+   * valid there. They read independent rows, so they run side by side — a
+   * cell save was waiting on them one after another. Settled rather than
+   * Promise.all so the program's error always answers first, as it did when
+   * it was checked first: an unknown program reads as PROGRAM_NOT_FOUND, not
+   * ENROLLMENT_NOT_FOUND.
+   */
+  private async assertWritable(
+    programId: string,
+    year: number,
+    mode: EntryMode,
+    payer: PaymentPayer,
+  ): Promise<void> {
+    const [window, payerCheck] = await Promise.allSettled([
+      this.cycleService.resolveWindow(programId, year),
+      this.assertPayer(programId, payer),
+    ]);
+    if (window.status === 'rejected') throw window.reason;
+    this.assertEntryMode(window.value.program, mode);
+    if (payerCheck.status === 'rejected') throw payerCheck.reason;
   }
 
   private assertEntryMode(program: ProgramView, mode: EntryMode): void {

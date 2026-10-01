@@ -149,6 +149,13 @@ export class ContributorDuplicateService {
     };
   }
 
+  async countOpenFlags(): Promise<{ openCount: number }> {
+    const openCount = await this.prisma.contributorDuplicateFlag.count({
+      where: { status: 'OPEN' },
+    });
+    return { openCount };
+  }
+
   /** "These are different people." The pair is never raised again. */
   async dismissFlag(userId: string, flagId: string) {
     // The conditional update is the decision: two reviewers racing on one

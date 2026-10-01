@@ -250,6 +250,42 @@ describe('PaymentService', () => {
         ),
       ).rejects.toMatchObject({ errorCode: 'PROGRAM_NOT_MONTHLY' });
     });
+
+    // The program and payer checks run side by side; the program's answer
+    // must still come first, as when it was checked first.
+    it('answers PROGRAM_NOT_FOUND for an unknown program even though its enrollment check fails too', async () => {
+      mockProgramService.assertProgramExists.mockRejectedValue(
+        new AppException('PROGRAM_NOT_FOUND', {}, HttpStatus.NOT_FOUND),
+      );
+      mockEnrollmentService.assertEnrolled.mockRejectedValue(
+        new AppException('ENROLLMENT_NOT_FOUND', {}, HttpStatus.NOT_FOUND),
+      );
+      await expect(
+        service.setCell(
+          'u1',
+          'gone',
+          CONTRIBUTOR,
+          { year: 2026, month: 1 },
+          { isStarred: false, amount: '1' },
+        ),
+      ).rejects.toMatchObject({ errorCode: 'PROGRAM_NOT_FOUND' });
+      expect(mockPrisma.payment.upsert).not.toHaveBeenCalled();
+    });
+
+    it('answers the cycle fence before a payer failure', async () => {
+      mockEnrollmentService.assertEnrolled.mockRejectedValue(
+        new AppException('ENROLLMENT_NOT_FOUND', {}, HttpStatus.NOT_FOUND),
+      );
+      await expect(
+        service.setCell(
+          'u1',
+          'fund',
+          CONTRIBUTOR,
+          { year: 2030, month: 1 },
+          { isStarred: false, amount: '1' },
+        ),
+      ).rejects.toMatchObject({ errorCode: 'CYCLE_YEAR_OUT_OF_RANGE' });
+    });
   });
 
   describe('clearCell', () => {
@@ -364,6 +400,50 @@ describe('PaymentService', () => {
         }),
       );
       expect(mockPrisma.payment.deleteMany).not.toHaveBeenCalled();
+    });
+
+    // A dated program with cycles: the entry's year, read beside the
+    // program, is fenced into the current cycle like a write would be.
+    const DRIVE = {
+      ...DATED_PROGRAM,
+      id: 'drive',
+      hasCycles: true,
+      cycles: [{ ...CYCLE, programId: 'drive' }],
+    };
+
+    it('refuses to remove an entry from outside the current cycle', async () => {
+      mockProgramService.assertProgramExists.mockResolvedValue(DRIVE);
+      mockPrisma.payment.findFirst.mockResolvedValue({ year: 2031 });
+
+      await expect(
+        service.deletePayment('drive', 'pay-1'),
+      ).rejects.toMatchObject({ errorCode: 'CYCLE_YEAR_OUT_OF_RANGE' });
+      expect(mockPrisma.payment.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('removes an entry inside the current cycle', async () => {
+      mockProgramService.assertProgramExists.mockResolvedValue(DRIVE);
+      mockPrisma.payment.findFirst.mockResolvedValue({ year: 2027 });
+      mockPrisma.payment.deleteMany.mockResolvedValue({ count: 1 });
+
+      await expect(service.deletePayment('drive', 'pay-1')).resolves.toEqual({
+        id: 'pay-1',
+        successCode: 'PAYMENT_DELETE_SUCCESS',
+      });
+      expect(mockPrisma.payment.deleteMany).toHaveBeenCalledWith({
+        where: { id: 'pay-1', programId: 'drive' },
+      });
+    });
+
+    it('answers PAYMENT_NOT_FOUND first for an entry in a program that does not exist', async () => {
+      mockProgramService.assertProgramExists.mockRejectedValue(
+        new AppException('PROGRAM_NOT_FOUND', {}, HttpStatus.NOT_FOUND),
+      );
+      mockPrisma.payment.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.deletePayment('gone', 'pay-1'),
+      ).rejects.toMatchObject({ errorCode: 'PAYMENT_NOT_FOUND' });
     });
   });
 

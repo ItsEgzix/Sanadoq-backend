@@ -229,17 +229,23 @@ export class EradatSummaryService {
 
   // What this program paid to others in `year` — informational only.
   private async loadTransfersOut(programId: string, year: number) {
-    const rows = await this.prisma.payment.groupBy({
-      by: ['programId'],
-      where: { payerProgramId: programId, year },
-      _sum: { amount: true },
-    });
-    // The unfiltered client on purpose: a receiving program deleted since
-    // must still be named, because the money did leave.
-    const names = await this.prisma.raw.program.findMany({
-      where: { id: { in: rows.map((row) => row.programId) } },
-      select: { id: true, name: true },
-    });
+    const [rows, names] = await Promise.all([
+      this.prisma.payment.groupBy({
+        by: ['programId'],
+        where: { payerProgramId: programId, year },
+        _sum: { amount: true },
+      }),
+      // The same set of receivers, found by the relation rather than by the
+      // ids above, so both run at once instead of one round trip after the
+      // other. The unfiltered client on purpose: a receiving program deleted
+      // since must still be named, because the money did leave.
+      this.prisma.raw.program.findMany({
+        where: {
+          receivedPayments: { some: { payerProgramId: programId, year } },
+        },
+        select: { id: true, name: true },
+      }),
+    ]);
     const programs = rows.map((row) => ({
       programId: row.programId,
       name: names.find((p) => p.id === row.programId)?.name ?? '',

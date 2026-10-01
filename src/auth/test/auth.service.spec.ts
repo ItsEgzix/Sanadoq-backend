@@ -13,6 +13,8 @@ const mockPrisma = {
     update: jest.fn(),
     updateMany: jest.fn(),
   },
+  // The session user's role, read beside the user (findSessionUser).
+  role: { findFirst: jest.fn() },
 };
 const mockTokens = {
   signAccessToken: jest.fn(),
@@ -39,6 +41,7 @@ describe('AuthService', () => {
 
   beforeEach(() => {
     jest.resetAllMocks();
+    mockPrisma.role.findFirst.mockResolvedValue(USER.role);
     mockTokens.signAccessToken.mockResolvedValue('access');
     mockTokens.signRefreshToken.mockResolvedValue('refresh');
     service = new AuthService(

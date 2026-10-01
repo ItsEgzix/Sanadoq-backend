@@ -41,6 +41,20 @@ never a specific user — so a second role (say, a collector) is an `INSERT INTO
 "Role"`, not a code change. Today there is one role, `FUND_MANAGER`, holding
 `MANAGE_FUND`, and every account has it. Accounts are switched off, never deleted.
 
+The guard's account check (active, not revoked, permission held) is a database
+read. On writes it finishes before the handler runs; on `GET`s it runs beside the
+handler and `AccessCheckInterceptor` holds the response until it passes, so a
+revoked token still gets nothing back but reads skip a round trip.
+
+## Speed
+
+The database is remote (Neon), so latency is round trips, not query cost: one
+is ~190 ms from the dev machine and a new connection ~2 s. Hot paths therefore
+run independent queries side by side instead of nesting `select`s (Prisma runs a
+nested relation as a second query, after the first), and the `pg` pool keeps
+connections for 5 minutes instead of pg's 10 seconds — see the constants at the
+top of `src/prisma/prisma.service.ts`. Keep both in mind when adding a read.
+
 ## Layout
 
 | Path                | Owns                                                                                                   |
@@ -82,19 +96,19 @@ never a specific user — so a second role (say, a collector) is an `INSERT INTO
 
 ## API
 
-| Method & path                                                                                           | Does                                                |
-| ------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| `POST /auth/login`, `/auth/refresh`, `/auth/logout`, `/auth/password`; `GET /auth/me`                   | Session                                             |
-| `GET/POST /users`, `PATCH /users/:id`, `POST /users/:id/password`                                       | Accounts                                            |
-| `GET/POST /programs`, `GET/PATCH/DELETE /programs/:id`                                                  | Programs (the protected one refuses delete/reshape) |
-| `GET/POST …/:id/cycles`, `GET …/cycles/current`, `PATCH …/cycles/:cid`, `POST …/cycles/:cid/activate`   | A program's cycles                                  |
-| `GET/POST …/:id/enrollments`, `PATCH/DELETE …/enrollments/:eid`, `POST …/enrollments/:eid/mark-dormant` | Enrollments                                         |
-| `PUT/DELETE …/:id/cells/contributors/:contributorId/:year/:month`                                       | A contributor's grid cell                           |
-| `PUT/DELETE …/:id/cells/programs/:payerProgramId/:year/:month`                                          | Another program's grid cell                         |
-| `POST …/:id/payments`, `DELETE …/:id/payments/:paymentId`                                               | Dated ledger entries                                |
-| `GET …/:id/summary`, `…/lines`, `…/transfer-lines`, `…/payments`                                        | Read side                                           |
-| `GET/POST /contributors`, `GET/PATCH/DELETE /contributors/:id`                                          | Contributors                                        |
-| `GET /contributors/duplicates`, `POST …/scan`, `POST …/:fid/merge`, `POST …/:fid/dismiss`               | Duplicate review                                    |
+| Method & path                                                                                                 | Does                                                |
+| ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `POST /auth/login`, `/auth/refresh`, `/auth/logout`, `/auth/password`; `GET /auth/me`                         | Session                                             |
+| `GET/POST /users`, `PATCH /users/:id`, `POST /users/:id/password`                                             | Accounts                                            |
+| `GET/POST /programs`, `GET/PATCH/DELETE /programs/:id`                                                        | Programs (the protected one refuses delete/reshape) |
+| `GET/POST …/:id/cycles`, `GET …/cycles/current`, `PATCH …/cycles/:cid`, `POST …/cycles/:cid/activate`         | A program's cycles                                  |
+| `GET/POST …/:id/enrollments`, `PATCH/DELETE …/enrollments/:eid`, `POST …/enrollments/:eid/mark-dormant`       | Enrollments                                         |
+| `PUT/DELETE …/:id/cells/contributors/:contributorId/:year/:month`                                             | A contributor's grid cell                           |
+| `PUT/DELETE …/:id/cells/programs/:payerProgramId/:year/:month`                                                | Another program's grid cell                         |
+| `POST …/:id/payments`, `DELETE …/:id/payments/:paymentId`                                                     | Dated ledger entries                                |
+| `GET …/:id/summary`, `…/lines`, `…/transfer-lines`, `…/payments`                                              | Read side                                           |
+| `GET/POST /contributors`, `GET/PATCH/DELETE /contributors/:id`                                                | Contributors                                        |
+| `GET /contributors/duplicates`, `GET …/open-count`, `POST …/scan`, `POST …/:fid/merge`, `POST …/:fid/dismiss` | Duplicate review (`open-count` feeds the badge)     |
 
 (`…` = `/programs`.)
 

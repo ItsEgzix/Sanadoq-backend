@@ -32,6 +32,13 @@ export class ContributorDuplicateController {
     return this.duplicateService.listFlags(query);
   }
 
+  // The sidebar's badge. One count, where a page of flags reads every pair's
+  // contributors and their enrollments to get the same number.
+  @Get('open-count')
+  async openCount() {
+    return this.duplicateService.countOpenFlags();
+  }
+
   @Post('scan')
   @HttpCode(HttpStatus.OK)
   async scan() {

@@ -28,18 +28,20 @@ export class EradatWindowService {
     programId: string,
     requestedYear?: number,
   ): Promise<ReadWindow> {
-    const window = await this.cycleService.resolveWindow(
-      programId,
-      requestedYear,
-    );
+    const [window, rows] = await Promise.all([
+      this.cycleService.resolveWindow(programId, requestedYear),
+      // Read beside the program rather than after it. Only a program without
+      // cycles uses it, but finding that out first would cost a round trip,
+      // and this is one scan of the (programId, year) index.
+      this.prisma.payment.groupBy({
+        by: ['year'],
+        where: { programId },
+        orderBy: { year: 'asc' },
+        take: MAX_WINDOW_YEARS,
+      }),
+    ]);
     if (window.cycle) return { ...window, years: window.cycle.years };
 
-    const rows = await this.prisma.payment.groupBy({
-      by: ['year'],
-      where: { programId },
-      orderBy: { year: 'asc' },
-      take: MAX_WINDOW_YEARS,
-    });
     const years = [...new Set([...rows.map((row) => row.year), window.year])];
     return { ...window, years: years.sort((a, b) => a - b) };
   }

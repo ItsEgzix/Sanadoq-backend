@@ -10,7 +10,13 @@ export interface CurrentUserPayload {
   userId: string;
 }
 
-export type AuthenticatedRequest = Request & { user?: CurrentUserPayload };
+export type AuthenticatedRequest = Request & {
+  user?: CurrentUserPayload;
+  // On a read, AuthGuard's account check still in flight: resolves to null
+  // when it passed, or to the error to answer with. AccessCheckInterceptor
+  // holds the response until it settles.
+  pendingAccessCheck?: Promise<Error | null>;
+};
 
 /**
  * The signed-in user. Only meaningful on routes AuthGuard authenticated;

@@ -11,7 +11,8 @@ const mockPrisma = {
     update: jest.fn(),
   },
   payment: { count: jest.fn() },
-  cycle: { count: jest.fn() },
+  // findFirst/findMany: the current cycle, read beside every program read.
+  cycle: { count: jest.fn(), findFirst: jest.fn(), findMany: jest.fn() },
 };
 
 const FUND = {
@@ -43,6 +44,8 @@ describe('ProgramService', () => {
 
   beforeEach(() => {
     jest.resetAllMocks();
+    mockPrisma.cycle.findFirst.mockResolvedValue(null);
+    mockPrisma.cycle.findMany.mockResolvedValue([]);
     service = new ProgramService(mockPrisma as unknown as PrismaService);
   });
 
