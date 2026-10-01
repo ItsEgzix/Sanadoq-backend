@@ -3,20 +3,21 @@
 //
 // Layout
 //   1. Access        Role (named permission bundles) and User
-//   2. People        Person — one row per human, system-wide — and the
-//                    PersonDuplicateFlag review queue
+//   2. Contributors  Contributor — one row per human, system-wide — and the
+//                    ContributorDuplicateFlag review queue
 //   3. Programs      Program — every revenue stream (the fund's membership,
 //                    مواساة, جامع السعيد, each campaign) is a row here — and
 //                    its own Cycle rows when it has cycles
-//   4. Enrollment    ProgramEnrollment — a Person's participation in one
+//   4. Enrollment    ProgramEnrollment — a Contributor's participation in one
 //                    Program, carrying that program's pledge for them
 //   5. Payments      Payment — money a Program received
 //
 // Rules that span models
-//   - A Payment has exactly one payer: a Person, a free-text name, or another
-//     Program (CHECK "Payment_exactly_one_payer"). A Person payer must be
-//     enrolled in the receiving program — the composite FK
-//     (personId, programId) → ProgramEnrollment makes that a database fact.
+//   - A Payment has exactly one payer: a Contributor, a free-text name, or
+//     another Program (CHECK "Payment_exactly_one_payer"). A Contributor payer
+//     must be enrolled in the receiving program — the composite FK
+//     (contributorId, programId) → ProgramEnrollment makes that a database
+//     fact.
 //   - A Payment is either a monthly cell (year + month) or a dated entry
 //     (paymentDate, year derived from it). Programs that are PERIODIC with
 //     cycles keep the monthly grid; every other program keeps a dated ledger.
@@ -84,30 +85,31 @@ model User {
 
   role                   Role                  @relation(fields: [roleKey], references: [key], onUpdate: Cascade, onDelete: Restrict)
   recordedPayments       Payment[]
-  resolvedDuplicateFlags PersonDuplicateFlag[]
+  resolvedDuplicateFlags ContributorDuplicateFlag[]
 
   @@index([roleKey])
 }
 
-// ── People ─────────────────────────────────────────────────────────────────
+// ── Contributors ───────────────────────────────────────────────────────────
 
 /// One human, system-wide. Program-specific facts (the pledge, the previous
-/// subscription, dormancy) live on ProgramEnrollment, because the same person
-/// can pledge different amounts to the fund and to مواساة. A Person with no
-/// enrollments is valid — someone migrated in but not yet assigned anywhere.
-model Person {
+/// subscription, dormancy) live on ProgramEnrollment, because the same
+/// contributor can pledge different amounts to the fund and to مواساة. A
+/// Contributor with no enrollments is valid — someone migrated in but not yet
+/// assigned anywhere.
+model Contributor {
   id            String    @id @default(uuid())
-  name          String // CHECK "Person_name_not_blank"
+  name          String // CHECK "Contributor_name_not_blank"
   // The workbook's YYMMNNN number (رقم الحساب). Unique across deleted and
   // merged rows on purpose: a retired number is never reissued, so an old
-  // paper receipt can never point at two people.
-  accountNumber String    @unique // CHECK "Person_account_number_digits"
+  // paper receipt can never point at two contributors.
+  accountNumber String    @unique // CHECK "Contributor_account_number_digits"
   phone         String?
   email         String?
   // Set when a reviewer confirmed this record and another are the same human
-  // and kept the other one (PersonDuplicateService.mergeDuplicate). The row
-  // stays, soft-deleted, so its account number still resolves to someone.
-  // CHECK "Person_merged_is_deleted" keeps merged rows out of every list.
+  // and kept the other one (ContributorDuplicateService.mergeDuplicate). The
+  // row stays, soft-deleted, so its account number still resolves to someone.
+  // CHECK "Contributor_merged_is_deleted" keeps merged rows out of every list.
   mergedIntoId  String?
   isDeleted     Boolean   @default(false)
   deletedAt     DateTime?
@@ -116,12 +118,12 @@ model Person {
 
   // SetNull: a merge target is never hard-deleted in practice, but if one
   // were, the merged row must survive as a retired number.
-  mergedInto  Person?             @relation("PersonMerge", fields: [mergedIntoId], references: [id], onDelete: SetNull)
-  mergedFrom  Person[]            @relation("PersonMerge")
+  mergedInto  Contributor?             @relation("ContributorMerge", fields: [mergedIntoId], references: [id], onDelete: SetNull)
+  mergedFrom  Contributor[]            @relation("ContributorMerge")
   enrollments ProgramEnrollment[]
   payments    Payment[]
-  flagsAsA    PersonDuplicateFlag[] @relation("DuplicateFlagPersonA")
-  flagsAsB    PersonDuplicateFlag[] @relation("DuplicateFlagPersonB")
+  flagsAsA    ContributorDuplicateFlag[] @relation("DuplicateFlagContributorA")
+  flagsAsB    ContributorDuplicateFlag[] @relation("DuplicateFlagContributorB")
 
   @@index([mergedIntoId])
 }
@@ -132,18 +134,18 @@ enum DuplicateFlagStatus {
   DISMISSED // confirmed different people; a rescan never re-raises the pair
 }
 
-/// A pair of Person records that look like the same human. Raised by the
-/// duplicate scan, resolved only by a person: the workbook has real
+/// A pair of Contributor records that look like the same human. Raised by the
+/// duplicate scan, resolved only by a reviewer: the workbook has real
 /// near-duplicates (same name, different account numbers in different sheets)
 /// and real namesakes, and only someone who knows the fund can tell them apart.
-model PersonDuplicateFlag {
+model ContributorDuplicateFlag {
   id           String              @id @default(uuid())
-  // Stored in a fixed order (CHECK "PersonDuplicateFlag_ordered_pair") so the
-  // unique index below sees (a, b) and (b, a) as the same pair.
-  personAId    String
-  personBId    String
-  // DuplicateReason codes from src/people/person-duplicate.util.ts — why the
-  // scan thought these match, shown to the reviewer.
+  // Stored in a fixed order (CHECK "ContributorDuplicateFlag_ordered_pair") so
+  // the unique index below sees (a, b) and (b, a) as the same pair.
+  contributorAId    String
+  contributorBId    String
+  // DuplicateReason codes from src/contributors/contributor-duplicate.util.ts —
+  // why the scan thought these match, shown to the reviewer.
   reasons      String[]
   status       DuplicateFlagStatus @default(OPEN)
   resolvedById String?
@@ -151,16 +153,17 @@ model PersonDuplicateFlag {
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
 
-  // Cascade: a flag is about its two people and means nothing without them.
-  // People are soft-deleted, so this fires only on a deliberate hard delete.
-  personA    Person @relation("DuplicateFlagPersonA", fields: [personAId], references: [id], onDelete: Cascade)
-  personB    Person @relation("DuplicateFlagPersonB", fields: [personBId], references: [id], onDelete: Cascade)
+  // Cascade: a flag is about its two contributors and means nothing without
+  // them. Contributors are soft-deleted, so this fires only on a deliberate
+  // hard delete.
+  contributorA    Contributor @relation("DuplicateFlagContributorA", fields: [contributorAId], references: [id], onDelete: Cascade)
+  contributorB    Contributor @relation("DuplicateFlagContributorB", fields: [contributorBId], references: [id], onDelete: Cascade)
   // SetNull: the decision outlives the account of whoever made it.
   resolvedBy User?  @relation(fields: [resolvedById], references: [id], onDelete: SetNull)
 
-  // The dedupe for repeated scans, and personAId's FK index.
-  @@unique([personAId, personBId])
-  @@index([personBId])
+  // The dedupe for repeated scans, and contributorAId's FK index.
+  @@unique([contributorAId, contributorBId])
+  @@index([contributorBId])
   @@index([status, createdAt])
 }
 
@@ -234,18 +237,18 @@ enum EnrollmentStatus {
   DORMANT
 }
 
-/// A Person's participation in one Program. Hard-deleted only while it has
+/// A Contributor's participation in one Program. Hard-deleted only while it has
 /// no payments (a mistaken enrollment); with payments it can only go dormant.
 model ProgramEnrollment {
   id                   String           @id @default(uuid())
-  personId             String
+  contributorId             String
   programId            String
-  // The pledged yearly amount for this person in this program (معدل الاشتراك
-  // السنوي) — expected revenue. Never derived from payments: it is the
+  // The pledged yearly amount for this contributor in this program (معدل
+  // الاشتراك السنوي) — expected revenue. Never derived from payments: it is the
   // yardstick payments are measured against. Zero means no pledge (a one-time
   // campaign donor). CHECK "ProgramEnrollment_expected_rate_non_negative".
   expectedRate         Decimal          @db.Decimal(14, 2)
-  // الاشتراك السابق — everything this person paid this program before its
+  // الاشتراك السابق — everything this contributor paid this program before its
   // current cycle, typed in from the old books. Never recomputed: the
   // payments it summarises predate this system.
   previousSubscription Decimal          @default(0) @db.Decimal(14, 2)
@@ -254,14 +257,15 @@ model ProgramEnrollment {
   updatedAt            DateTime         @updatedAt
 
   // Restrict on both: an enrollment carries a pledge and anchors payments, so
-  // neither side may vanish under it. People and programs are soft-deleted.
-  person   Person    @relation(fields: [personId], references: [id], onDelete: Restrict)
+  // neither side may vanish under it. Contributors and programs are
+  // soft-deleted.
+  contributor   Contributor    @relation(fields: [contributorId], references: [id], onDelete: Restrict)
   program  Program   @relation(fields: [programId], references: [id], onDelete: Restrict)
   payments Payment[]
 
-  // One enrollment per person per program; also the target of Payment's
-  // composite FK, and personId's FK index.
-  @@unique([personId, programId])
+  // One enrollment per contributor per program; also the target of Payment's
+  // composite FK, and contributorId's FK index.
+  @@unique([contributorId, programId])
   @@index([programId, status])
 }
 
@@ -274,8 +278,8 @@ model Payment {
   // The receiving program. Every revenue total filters on this column.
   programId         String
   // ── The payer: exactly one of these three — CHECK "Payment_exactly_one_payer".
-  // A registered, enrolled person.
-  personId          String?
+  // A registered, enrolled contributor.
+  contributorId          String?
   // Someone not in the system at all — a one-off campaign donor. Dated
   // entries only (CHECK "Payment_freetext_is_dated"): a stranger has no row
   // in a monthly grid.
@@ -313,13 +317,13 @@ model Payment {
   // Restrict throughout: a payment is part of the books and must never vanish
   // because something it points at was removed.
   program      Program            @relation("PaymentReceiver", fields: [programId], references: [id], onDelete: Restrict)
-  person       Person?            @relation(fields: [personId], references: [id], onDelete: Restrict)
+  contributor       Contributor?            @relation(fields: [contributorId], references: [id], onDelete: Restrict)
   payerProgram Program?           @relation("PaymentPayerProgram", fields: [payerProgramId], references: [id], onDelete: Restrict)
-  // The payer must be enrolled in the receiving program. ON UPDATE CASCADE
-  // (set in migration SQL; Prisma calls it onUpdate) is what lets a duplicate
-  // merge move an enrollment to the surviving person and carry its payments
+  // The payer must be enrolled in the receiving program. ON UPDATE CASCADE (set
+  // in migration SQL; Prisma calls it onUpdate) is what lets a duplicate merge
+  // move an enrollment to the surviving contributor and carry its payments
   // along in one statement.
-  enrollment   ProgramEnrollment? @relation(fields: [personId, programId], references: [personId, programId], onUpdate: Cascade, onDelete: Restrict)
+  enrollment   ProgramEnrollment? @relation(fields: [contributorId, programId], references: [contributorId, programId], onUpdate: Cascade, onDelete: Restrict)
   // SetNull: the payment outlives the account of whoever typed it in.
   recordedBy   User?              @relation(fields: [recordedById], references: [id], onDelete: SetNull)
 
@@ -327,11 +331,11 @@ model Payment {
   // dedupe, so a double-click on save upserts instead of adding a row.
   // Postgres treats NULLs as distinct, so dated entries (month NULL) and rows
   // of the other payer kind never collide here.
-  @@unique([programId, personId, year, month])
+  @@unique([programId, contributorId, year, month])
   @@unique([programId, payerProgramId, year, month])
   // Every summary reads one program's year.
   @@index([programId, year])
-  @@index([personId])
+  @@index([contributorId])
   @@index([payerProgramId, year])
   @@index([recordedById])
 }

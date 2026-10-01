@@ -46,7 +46,7 @@ export function runningTotal(
 
 /**
  * collection_ratio(program, year) = SUM(expected_rate over the program's
- * enrollments) ÷ SUM(that year's payments by those enrolled people).
+ * enrollments) ÷ SUM(that year's payments by those enrolled contributors).
  *
  * Per program, never across programs — mirroring the workbook, which kept
  * its project rows out of the fund's ratio. And only pledge-backed money on

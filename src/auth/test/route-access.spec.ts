@@ -4,8 +4,8 @@ import { CycleController } from 'src/cycles/cycle.controller';
 import { EnrollmentController } from 'src/enrollments/enrollment.controller';
 import { EradatController } from 'src/eradat/eradat.controller';
 import { PaymentController } from 'src/payments/payment.controller';
-import { PersonDuplicateController } from 'src/people/person-duplicate.controller';
-import { PersonController } from 'src/people/person.controller';
+import { ContributorDuplicateController } from 'src/contributors/contributor-duplicate.controller';
+import { ContributorController } from 'src/contributors/contributor.controller';
 import { ProgramController } from 'src/programs/program.controller';
 import { UserController } from 'src/users/user.controller';
 import { AuthController } from '../auth.controller';
@@ -15,8 +15,8 @@ const CONTROLLERS = [
   UserController,
   ProgramController,
   CycleController,
-  PersonDuplicateController,
-  PersonController,
+  ContributorDuplicateController,
+  ContributorController,
   EnrollmentController,
   PaymentController,
   EradatController,

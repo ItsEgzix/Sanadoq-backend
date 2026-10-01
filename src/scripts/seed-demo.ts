@@ -1,11 +1,12 @@
 /**
- * Seeds a demo fund in the Person / Program shape, so every screen has
+ * Seeds a demo fund in the Contributor / Program shape, so every screen has
  * something to show:
  *   - the protected fund program (made by the migration) with a 4-year cycle,
  *     2026–2029, and two dozen members with mixed habits — monthly, quarterly
  *     and annual lumps with ★ months, gaps, two dormant;
- *   - مواساة, its own monthly grid and cycle, with some of the same people at
- *     different rates, plus the fund's monthly contribution as a transfer row;
+ *   - مواساة, its own monthly grid and cycle, with some of the same
+ *     contributors at different rates, plus the fund's monthly contribution as
+ *     a transfer row;
  *   - جامع السعيد, a standing program with no cycles (a dated ledger);
  *   - a Ramadan campaign with one-off donors who are in no directory, and a
  *     donation from the fund;
@@ -24,8 +25,8 @@
  */
 import 'dotenv/config';
 import type { Prisma, PrismaClient } from 'generated/prisma/client';
-import { findDuplicatePairs } from 'src/people/person-duplicate.util';
-import { matchPeopleByAccount, openDatabase } from './script.util';
+import { findDuplicatePairs } from 'src/contributors/contributor-duplicate.util';
+import { matchContributorsByAccount, openDatabase } from './script.util';
 
 const APPLY = process.argv.includes('--apply');
 const BATCH = 500;
@@ -34,7 +35,7 @@ const CYCLE = { startYear: 2026, lengthYears: 4, endYear: 2029 };
 
 type Habit = 'MONTHLY' | 'QUARTERLY' | 'ANNUAL' | 'IRREGULAR';
 
-interface DemoPerson {
+interface DemoContributor {
   name: string;
   accountNumber: string; // YYMMNNN
   fundRate?: number;
@@ -44,7 +45,7 @@ interface DemoPerson {
   jamea?: number; // monthly amount to جامع السعيد
 }
 
-const PEOPLE: DemoPerson[] = [
+const CONTRIBUTORS: DemoContributor[] = [
   {
     name: 'عبدالله حسن الطيب',
     accountNumber: '0903001',
@@ -257,16 +258,18 @@ function paidMonths(): Array<{ year: number; month: number }> {
 }
 
 function planFundCells(
-  person: DemoPerson,
+  contributor: DemoContributor,
   random: () => number,
 ): PlannedCell[] {
-  const rate = person.fundRate ?? 0;
+  const rate = contributor.fundRate ?? 0;
   const monthly = Math.round(rate / 12);
   // Dormant members stopped paying in June.
-  const months = paidMonths().filter((m) => !person.dormant || m.month < 6);
+  const months = paidMonths().filter(
+    (m) => !contributor.dormant || m.month < 6,
+  );
   const cells: PlannedCell[] = [];
   for (const { year, month } of months) {
-    switch (person.habit) {
+    switch (contributor.habit) {
       case 'MONTHLY':
         if (random() > 0.08) {
           cells.push({ year, month, isStarred: false, amount: money(monthly) });
@@ -400,18 +403,18 @@ async function main() {
       }
     }
 
-    // People — matched to this script's own earlier rows by account number
-    // and name. A number someone else already holds is skipped, never
-    // linked: the demo must not attach invented payments to a real person.
-    console.log(`People: ${PEOPLE.length} planned`);
-    const planned = PEOPLE.map(({ name, accountNumber }) => ({
+    // Contributors — matched to this script's own earlier rows by account
+    // number and name. A number someone else already holds is skipped, never
+    // linked: the demo must not attach invented payments to a real contributor.
+    console.log(`Contributors: ${CONTRIBUTORS.length} planned`);
+    const planned = CONTRIBUTORS.map(({ name, accountNumber }) => ({
       key: accountNumber,
       name,
       accountNumber,
     }));
-    const before = await matchPeopleByAccount(prisma, planned);
+    const before = await matchContributorsByAccount(prisma, planned);
     if (APPLY && before.missing.length > 0) {
-      const { count } = await prisma.person.createMany({
+      const { count } = await prisma.contributor.createMany({
         data: before.missing.map(({ name, accountNumber }) => ({
           name,
           accountNumber,
@@ -420,63 +423,63 @@ async function main() {
       });
       console.log(`  inserted ${count}`);
     }
-    const { ids: personIds, conflicts } = APPLY
-      ? await matchPeopleByAccount(prisma, planned)
+    const { ids: contributorIds, conflicts } = APPLY
+      ? await matchContributorsByAccount(prisma, planned)
       : before;
-    for (const { planned: person, existingName } of conflicts) {
+    for (const { planned: contributor, existingName } of conflicts) {
       console.log(
-        `  CONFLICT ${person.accountNumber} is "${existingName}", not "${person.name}" — skipped`,
+        `  CONFLICT ${contributor.accountNumber} is "${existingName}", not "${contributor.name}" — skipped`,
       );
     }
     const skipped = new Set(conflicts.map((c) => c.planned.key));
     // In a dry run nothing exists yet; a placeholder keeps the counts honest.
-    const idOf = (person: DemoPerson) =>
-      personIds.get(person.accountNumber) ??
-      (APPLY || skipped.has(person.accountNumber)
+    const idOf = (contributor: DemoContributor) =>
+      contributorIds.get(contributor.accountNumber) ??
+      (APPLY || skipped.has(contributor.accountNumber)
         ? undefined
-        : `planned:${person.accountNumber}`);
+        : `planned:${contributor.accountNumber}`);
 
-    // Enrollments — the (person, program) unique key dedupes.
+    // Enrollments — the (contributor, program) unique key dedupes.
     const enrollments: Prisma.ProgramEnrollmentCreateManyInput[] = [];
-    for (const person of PEOPLE) {
-      const personId = idOf(person);
-      if (!personId) continue;
-      if (person.fundRate !== undefined) {
+    for (const contributor of CONTRIBUTORS) {
+      const contributorId = idOf(contributor);
+      if (!contributorId) continue;
+      if (contributor.fundRate !== undefined) {
         enrollments.push({
-          personId,
+          contributorId,
           programId: fund.id,
-          expectedRate: money(person.fundRate),
+          expectedRate: money(contributor.fundRate),
           // The typed-in figure for the years before this cycle.
           previousSubscription: money(
-            Math.round((person.fundRate * (2 + random() * 8)) / 50) * 50,
+            Math.round((contributor.fundRate * (2 + random() * 8)) / 50) * 50,
           ),
-          status: person.dormant ? 'DORMANT' : 'ACTIVE',
+          status: contributor.dormant ? 'DORMANT' : 'ACTIVE',
         });
       }
       const mwa = programs.get(MWA);
-      if (person.mwaRate !== undefined && mwa) {
+      if (contributor.mwaRate !== undefined && mwa) {
         enrollments.push({
-          personId,
+          contributorId,
           programId: mwa,
-          expectedRate: money(person.mwaRate),
+          expectedRate: money(contributor.mwaRate),
         });
       }
       const jamea = programs.get(JAMEA);
-      if (person.jamea !== undefined && jamea) {
+      if (contributor.jamea !== undefined && jamea) {
         enrollments.push({
-          personId,
+          contributorId,
           programId: jamea,
-          expectedRate: money(person.jamea * 12),
+          expectedRate: money(contributor.jamea * 12),
         });
       }
     }
     // Two campaign donors who are also members: enrolled with no pledge.
     const campaign = programs.get(CAMPAIGN);
-    for (const person of [PEOPLE[0], PEOPLE[4]]) {
-      const personId = idOf(person);
-      if (campaign && personId) {
+    for (const contributor of [CONTRIBUTORS[0], CONTRIBUTORS[4]]) {
+      const contributorId = idOf(contributor);
+      if (campaign && contributorId) {
         enrollments.push({
-          personId,
+          contributorId,
           programId: campaign,
           expectedRate: '0.00',
         });
@@ -495,41 +498,41 @@ async function main() {
 
     // Payments — cell keys and deterministic idempotency keys dedupe.
     const payments: Prisma.PaymentCreateManyInput[] = [];
-    for (const person of PEOPLE) {
-      const personId = idOf(person);
-      if (!personId) continue;
-      if (person.fundRate !== undefined) {
+    for (const contributor of CONTRIBUTORS) {
+      const contributorId = idOf(contributor);
+      if (!contributorId) continue;
+      if (contributor.fundRate !== undefined) {
         payments.push(
-          ...planFundCells(person, random).map((cell) => ({
+          ...planFundCells(contributor, random).map((cell) => ({
             ...cell,
             programId: fund.id,
-            personId,
+            contributorId,
           })),
         );
       }
       const mwa = programs.get(MWA);
-      if (person.mwaRate !== undefined && mwa) {
+      if (contributor.mwaRate !== undefined && mwa) {
         payments.push(
-          ...planMwaCells(person.mwaRate, random).map((cell) => ({
+          ...planMwaCells(contributor.mwaRate, random).map((cell) => ({
             ...cell,
             programId: mwa,
-            personId,
+            contributorId,
           })),
         );
       }
       const jamea = programs.get(JAMEA);
-      if (person.jamea !== undefined && jamea) {
+      if (contributor.jamea !== undefined && jamea) {
         for (const { year, month } of paidMonths()) {
           if (random() < 0.15) continue;
           const day = String(3 + Math.floor(random() * 6)).padStart(2, '0');
           const date = `${year}-${String(month).padStart(2, '0')}-${day}`;
           payments.push({
             programId: jamea,
-            personId,
-            amount: money(person.jamea),
+            contributorId,
+            amount: money(contributor.jamea),
             year,
             paymentDate: new Date(`${date}T00:00:00.000Z`),
-            idempotencyKey: `seed-demo:${JAMEA}:${person.accountNumber}:${date}`,
+            idempotencyKey: `seed-demo:${JAMEA}:${contributor.accountNumber}:${date}`,
           });
         }
       }
@@ -568,16 +571,16 @@ async function main() {
         paymentDate: new Date('2026-03-15T00:00:00.000Z'),
         idempotencyKey: `seed-demo:${CAMPAIGN}:fund`,
       });
-      for (const person of [PEOPLE[0], PEOPLE[4]]) {
-        const personId = idOf(person);
-        if (!personId) continue;
+      for (const contributor of [CONTRIBUTORS[0], CONTRIBUTORS[4]]) {
+        const contributorId = idOf(contributor);
+        if (!contributorId) continue;
         payments.push({
           programId: campaign,
-          personId,
+          contributorId,
           amount: money(2000),
           year: 2026,
           paymentDate: new Date('2026-03-20T00:00:00.000Z'),
-          idempotencyKey: `seed-demo:${CAMPAIGN}:${person.accountNumber}`,
+          idempotencyKey: `seed-demo:${CAMPAIGN}:${contributor.accountNumber}`,
         });
       }
     }
@@ -606,29 +609,29 @@ async function main() {
 
 // The same rules the app's scan uses. Raises flags for a reviewer; merges nothing.
 async function flagDuplicates(prisma: PrismaClient) {
-  const people = APPLY
-    ? await prisma.person.findMany({
+  const contributors = APPLY
+    ? await prisma.contributor.findMany({
         where: { isDeleted: false },
         select: { id: true, name: true, accountNumber: true },
       })
-    : PEOPLE.map((p) => ({
+    : CONTRIBUTORS.map((p) => ({
         id: p.accountNumber,
         name: p.name,
         accountNumber: p.accountNumber,
       }));
-  const pairs = findDuplicatePairs(people);
+  const pairs = findDuplicatePairs(contributors);
   console.log(
     `Possible duplicates: ${pairs.length} pairs (flagged for review, never merged)`,
   );
   for (const pair of pairs) {
-    const a = people.find((p) => p.id === pair.personAId);
-    const b = people.find((p) => p.id === pair.personBId);
+    const a = contributors.find((p) => p.id === pair.contributorAId);
+    const b = contributors.find((p) => p.id === pair.contributorBId);
     console.log(
       `  ${a?.accountNumber} ${a?.name}  ~  ${b?.accountNumber} ${b?.name}  [${pair.reasons.join(', ')}]`,
     );
   }
   if (APPLY && pairs.length > 0) {
-    const { count } = await prisma.personDuplicateFlag.createMany({
+    const { count } = await prisma.contributorDuplicateFlag.createMany({
       data: pairs,
       skipDuplicates: true,
     });

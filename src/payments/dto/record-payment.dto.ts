@@ -7,7 +7,10 @@ import { z } from 'zod';
 // matching CHECK "Payment_exactly_one_payer".
 const payerSchema = z.discriminatedUnion('kind', [
   // Registered and enrolled in the receiving program.
-  z.object({ kind: z.literal('PERSON'), personId: z.string().min(1).max(64) }),
+  z.object({
+    kind: z.literal('CONTRIBUTOR'),
+    contributorId: z.string().min(1).max(64),
+  }),
   // Another program paying out of its own funds.
   z.object({
     kind: z.literal('PROGRAM'),

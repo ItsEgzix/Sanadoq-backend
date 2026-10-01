@@ -46,7 +46,7 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     });
 
     // Returning an object from a constructor replaces `this`. Nest therefore
-    // injects the extended client itself, so `this.prisma.person.findMany`
+    // injects the extended client itself, so `this.prisma.contributor.findMany`
     // is filtered without a hand-written getter per model. `raw` and the
     // lifecycle hooks are copied on so Nest still finds them; the hooks are
     // arrows so they keep running against this original instance.

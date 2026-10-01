@@ -185,10 +185,13 @@ export class PaymentService {
     payer: PaymentPayer,
   ): Promise<void> {
     switch (payer.kind) {
-      case 'PERSON':
+      case 'CONTRIBUTOR':
         // Also a database fact (Payment's composite FK); this gives the
         // readable error.
-        await this.enrollmentService.assertEnrolled(programId, payer.personId);
+        await this.enrollmentService.assertEnrolled(
+          programId,
+          payer.contributorId,
+        );
         return;
       case 'PROGRAM': {
         // TODO(expenses): a program paying another is an outflow for the

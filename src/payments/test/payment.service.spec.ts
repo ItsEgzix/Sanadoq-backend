@@ -47,7 +47,7 @@ const mockPrisma = {
 const mockProgramService = { assertProgramExists: jest.fn() };
 const mockEnrollmentService = { assertEnrolled: jest.fn() };
 
-const PERSON = { kind: 'PERSON' as const, personId: 'p1' };
+const CONTRIBUTOR = { kind: 'CONTRIBUTOR' as const, contributorId: 'p1' };
 const FROM_FUND = { kind: 'PROGRAM' as const, programId: 'fund' };
 
 const entryRow = (overrides: Record<string, unknown> = {}) => ({
@@ -56,10 +56,10 @@ const entryRow = (overrides: Record<string, unknown> = {}) => ({
   paymentDate: new Date('2026-03-01T00:00:00.000Z'),
   amount: new Prisma.Decimal(250),
   createdAt: new Date(),
-  personId: null,
+  contributorId: null,
   payerNameFreetext: 'متبرع',
   payerProgramId: null,
-  person: null,
+  contributor: null,
   payerProgram: null,
   recordedBy: { name: 'Treasurer' },
   ...overrides,
@@ -88,7 +88,7 @@ describe('PaymentService', () => {
   });
 
   describe('setCell', () => {
-    it('upserts an enrolled person’s cell on its unique key and records who wrote it', async () => {
+    it('upserts an enrolled contributor’s cell on its unique key and records who wrote it', async () => {
       mockPrisma.payment.upsert.mockResolvedValue({
         year: 2026,
         month: 3,
@@ -99,7 +99,7 @@ describe('PaymentService', () => {
       const result = await service.setCell(
         'u1',
         'fund',
-        PERSON,
+        CONTRIBUTOR,
         { year: 2026, month: 3 },
         { isStarred: false, amount: '300.5' },
       );
@@ -107,16 +107,16 @@ describe('PaymentService', () => {
       expect(mockPrisma.payment.upsert).toHaveBeenCalledWith(
         expect.objectContaining({
           where: {
-            programId_personId_year_month: {
+            programId_contributorId_year_month: {
               programId: 'fund',
-              personId: 'p1',
+              contributorId: 'p1',
               year: 2026,
               month: 3,
             },
           },
           create: {
             programId: 'fund',
-            personId: 'p1',
+            contributorId: 'p1',
             year: 2026,
             month: 3,
             isStarred: false,
@@ -142,7 +142,7 @@ describe('PaymentService', () => {
       const result = await service.setCell(
         'u1',
         'fund',
-        PERSON,
+        CONTRIBUTOR,
         { year: 2026, month: 1 },
         { isStarred: true },
       );
@@ -155,7 +155,7 @@ describe('PaymentService', () => {
       expect(result.amount).toBeNull();
     });
 
-    it('writes another program’s row on the program-payer key, never the person one', async () => {
+    it('writes another program’s row on the program-payer key, never the contributor one', async () => {
       mockPrisma.payment.upsert.mockResolvedValue({
         year: 2026,
         month: 1,
@@ -180,7 +180,7 @@ describe('PaymentService', () => {
           month: 1,
         },
       });
-      expect(call.create).not.toHaveProperty('personId');
+      expect(call.create).not.toHaveProperty('contributorId');
       expect(mockEnrollmentService.assertEnrolled).not.toHaveBeenCalled();
     });
 
@@ -210,7 +210,7 @@ describe('PaymentService', () => {
       ).rejects.toMatchObject({ errorCode: 'PAYMENT_PAYER_PROGRAM_NOT_FOUND' });
     });
 
-    it('refuses a person not enrolled in the program before writing anything', async () => {
+    it('refuses a contributor not enrolled in the program before writing anything', async () => {
       mockEnrollmentService.assertEnrolled.mockRejectedValue(
         new AppException('ENROLLMENT_NOT_FOUND', {}, HttpStatus.NOT_FOUND),
       );
@@ -218,7 +218,7 @@ describe('PaymentService', () => {
         service.setCell(
           'u1',
           'fund',
-          PERSON,
+          CONTRIBUTOR,
           { year: 2026, month: 3 },
           { isStarred: false, amount: '1' },
         ),
@@ -231,7 +231,7 @@ describe('PaymentService', () => {
         service.setCell(
           'u1',
           'fund',
-          PERSON,
+          CONTRIBUTOR,
           { year: 2030, month: 1 },
           { isStarred: false, amount: '1' },
         ),
@@ -256,13 +256,13 @@ describe('PaymentService', () => {
     it('deletes by program, payer and month, and succeeds on an already-empty cell', async () => {
       mockPrisma.payment.deleteMany.mockResolvedValue({ count: 0 });
 
-      const result = await service.clearCell('fund', PERSON, {
+      const result = await service.clearCell('fund', CONTRIBUTOR, {
         year: 2026,
         month: 3,
       });
 
       expect(mockPrisma.payment.deleteMany).toHaveBeenCalledWith({
-        where: { programId: 'fund', personId: 'p1', year: 2026, month: 3 },
+        where: { programId: 'fund', contributorId: 'p1', year: 2026, month: 3 },
       });
       expect(result.successCode).toBe('PAYMENT_CELL_CLEAR_SUCCESS');
     });
@@ -372,7 +372,7 @@ describe('PaymentService', () => {
     try {
       service.recordAdvancePayment(
         'fund',
-        PERSON,
+        CONTRIBUTOR,
         { year: 2026, month: 1 },
         2027,
         '1200',

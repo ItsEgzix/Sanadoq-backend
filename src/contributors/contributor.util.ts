@@ -1,13 +1,13 @@
 import { toMoneyString } from 'src/common/utils/money.util';
-import type { PersonDetailRow } from './person.constant';
+import type { ContributorDetailRow } from './contributor.constant';
 
-/** A person with their enrollments, money as fixed-scale strings. */
-export function toPersonDetailView({
+/** A contributor with their enrollments, money as fixed-scale strings. */
+export function toContributorDetailView({
   enrollments,
-  ...person
-}: PersonDetailRow) {
+  ...contributor
+}: ContributorDetailRow) {
   return {
-    ...person,
+    ...contributor,
     enrollments: enrollments.map(({ program, ...enrollment }) => ({
       ...enrollment,
       programName: program.name,
@@ -18,4 +18,4 @@ export function toPersonDetailView({
   };
 }
 
-export type PersonDetailView = ReturnType<typeof toPersonDetailView>;
+export type ContributorDetailView = ReturnType<typeof toContributorDetailView>;

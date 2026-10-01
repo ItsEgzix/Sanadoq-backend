@@ -21,44 +21,47 @@ export function openDatabase(
   };
 }
 
-export interface PlannedPerson {
+export interface PlannedContributor {
   key: string;
   name: string;
   accountNumber: string;
 }
 
 /**
- * Links planned people to existing Person rows by account number — but only
- * where the stored record is live and carries the planned name, i.e. it is
- * this script's own row from an earlier run. An account number held under
+ * Links planned contributors to existing Contributor rows by account number —
+ * but only where the stored record is live and carries the planned name, i.e.
+ * it is this script's own row from an earlier run. An account number held under
  * another name, or by a retired record, is reported as a conflict and the
- * planned person is skipped: linking to it would merge two identities on the
- * number alone, which only a reviewer may do.
+ * planned contributor is skipped: linking to it would merge two identities on
+ * the number alone, which only a reviewer may do.
  */
-export async function matchPeopleByAccount(
+export async function matchContributorsByAccount(
   prisma: PrismaClient,
-  planned: readonly PlannedPerson[],
+  planned: readonly PlannedContributor[],
 ): Promise<{
   ids: Map<string, string>;
-  missing: PlannedPerson[];
-  conflicts: Array<{ planned: PlannedPerson; existingName: string }>;
+  missing: PlannedContributor[];
+  conflicts: Array<{ planned: PlannedContributor; existingName: string }>;
 }> {
-  const existing = await prisma.person.findMany({
+  const existing = await prisma.contributor.findMany({
     where: { accountNumber: { in: planned.map((p) => p.accountNumber) } },
     select: { id: true, name: true, accountNumber: true, isDeleted: true },
   });
   const byAccount = new Map(existing.map((p) => [p.accountNumber, p]));
   const ids = new Map<string, string>();
-  const missing: PlannedPerson[] = [];
-  const conflicts: Array<{ planned: PlannedPerson; existingName: string }> = [];
-  for (const person of planned) {
-    const found = byAccount.get(person.accountNumber);
-    if (!found) missing.push(person);
-    else if (!found.isDeleted && found.name === person.name) {
-      ids.set(person.key, found.id);
+  const missing: PlannedContributor[] = [];
+  const conflicts: Array<{
+    planned: PlannedContributor;
+    existingName: string;
+  }> = [];
+  for (const contributor of planned) {
+    const found = byAccount.get(contributor.accountNumber);
+    if (!found) missing.push(contributor);
+    else if (!found.isDeleted && found.name === contributor.name) {
+      ids.set(contributor.key, found.id);
     } else {
       conflicts.push({
-        planned: person,
+        planned: contributor,
         existingName: found.isDeleted ? `${found.name} (retired)` : found.name,
       });
     }

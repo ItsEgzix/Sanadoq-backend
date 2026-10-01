@@ -8,15 +8,17 @@ const cellCoordinatesSchema = z.object({
   month: z.coerce.number().int().min(1).max(12),
 });
 
-export const personCellParamsSchema = cellCoordinatesSchema.extend({
-  personId: z.string().max(64),
+export const contributorCellParamsSchema = cellCoordinatesSchema.extend({
+  contributorId: z.string().max(64),
 });
 
 export const programCellParamsSchema = cellCoordinatesSchema.extend({
   payerProgramId: z.string().max(64),
 });
 
-export class PersonCellParamsDto extends createZodDto(personCellParamsSchema) {}
+export class ContributorCellParamsDto extends createZodDto(
+  contributorCellParamsSchema,
+) {}
 
 export class ProgramCellParamsDto extends createZodDto(
   programCellParamsSchema,

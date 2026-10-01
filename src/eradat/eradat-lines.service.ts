@@ -39,26 +39,34 @@ export class EradatLinesService {
     const window = await this.windowService.resolve(programId, requested);
     const { rows, nextCursor } =
       await this.enrollmentService.listEnrollmentRows(programId, listQuery);
-    const personIds = rows.map((row) => row.personId);
+    const contributorIds = rows.map((row) => row.contributorId);
 
     let items;
     if (window.program.entryMode === 'MONTHLY') {
-      const cells = await this.loadPersonCells(programId, personIds, window);
+      const cells = await this.loadContributorCells(
+        programId,
+        contributorIds,
+        window,
+      );
       items = rows.map((row) => ({
         ...toEnrollmentView(row),
         ...buildGridLine(
-          cells.get(row.personId) ?? [],
+          cells.get(row.contributorId) ?? [],
           window.years,
           window.year,
           row.previousSubscription,
         ),
       }));
     } else {
-      const sums = await this.loadPersonYearSums(programId, personIds, window);
+      const sums = await this.loadContributorYearSums(
+        programId,
+        contributorIds,
+        window,
+      );
       items = rows.map((row) => ({
         ...toEnrollmentView(row),
         ...buildLedgerLine(
-          sums.get(row.personId),
+          sums.get(row.contributorId),
           window.years,
           window.year,
           row.previousSubscription,
@@ -145,61 +153,62 @@ export class EradatLinesService {
     };
   }
 
-  // Every cell of the given people in the window, grouped by person.
-  private async loadPersonCells(
+  // Every cell of the given contributors in the window, grouped by contributor.
+  private async loadContributorCells(
     programId: string,
-    personIds: string[],
+    contributorIds: string[],
     window: ReadWindow,
   ): Promise<Map<string, PaymentCellRow[]>> {
-    const byPerson = new Map<string, PaymentCellRow[]>();
-    if (personIds.length === 0) return byPerson;
+    const byContributor = new Map<string, PaymentCellRow[]>();
+    if (contributorIds.length === 0) return byContributor;
 
     const cells = await this.prisma.payment.findMany({
       where: {
         programId,
-        personId: { in: personIds },
+        contributorId: { in: contributorIds },
         year: this.windowRange(window),
       },
-      select: { personId: true, ...PAYMENT_CELL_SELECT },
-      // Bounded by construction — at most one cell per person per month —
+      select: { contributorId: true, ...PAYMENT_CELL_SELECT },
+      // Bounded by construction — at most one cell per contributor per month —
       // but stated so a broken unique index cannot turn this into a scan.
-      take: personIds.length * window.years.length * 12,
+      take: contributorIds.length * window.years.length * 12,
     });
-    for (const { personId, ...cell } of cells) {
-      if (!personId) continue;
-      const list = byPerson.get(personId);
+    for (const { contributorId, ...cell } of cells) {
+      if (!contributorId) continue;
+      const list = byContributor.get(contributorId);
       if (list) list.push(cell);
-      else byPerson.set(personId, [cell]);
+      else byContributor.set(contributorId, [cell]);
     }
-    return byPerson;
+    return byContributor;
   }
 
-  // A ledger can hold any number of entries per person, so totals come from
-  // SQL rather than fetched rows: at most one group per person per year.
-  private async loadPersonYearSums(
+  // A ledger can hold any number of entries per contributor, so totals come
+  // from SQL rather than fetched rows: at most one group per contributor per
+  // year.
+  private async loadContributorYearSums(
     programId: string,
-    personIds: string[],
+    contributorIds: string[],
     window: ReadWindow,
   ): Promise<Map<string, Map<number, Prisma.Decimal>>> {
-    const byPerson = new Map<string, Map<number, Prisma.Decimal>>();
-    if (personIds.length === 0) return byPerson;
+    const byContributor = new Map<string, Map<number, Prisma.Decimal>>();
+    if (contributorIds.length === 0) return byContributor;
 
     const rows = await this.prisma.payment.groupBy({
-      by: ['personId', 'year'],
+      by: ['contributorId', 'year'],
       where: {
         programId,
-        personId: { in: personIds },
+        contributorId: { in: contributorIds },
         year: this.windowRange(window),
       },
       _sum: { amount: true },
     });
     for (const row of rows) {
-      if (!row.personId) continue;
-      const years = byPerson.get(row.personId) ?? new Map();
+      if (!row.contributorId) continue;
+      const years = byContributor.get(row.contributorId) ?? new Map();
       years.set(row.year, row._sum.amount ?? ZERO);
-      byPerson.set(row.personId, years);
+      byContributor.set(row.contributorId, years);
     }
-    return byPerson;
+    return byContributor;
   }
 
   private windowRange(window: ReadWindow) {

@@ -6,7 +6,7 @@ import {
   isForeignKeyViolation,
   isUniqueViolation,
 } from 'src/common/utils/prisma-error.util';
-import { PersonService } from 'src/people/person.service';
+import { ContributorService } from 'src/contributors/contributor.service';
 import { ProgramService } from 'src/programs/program.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import type { CreateEnrollmentDto } from './dto/create-enrollment.dto';
@@ -22,11 +22,11 @@ import { toEnrollmentView } from './enrollment.util';
 const DIGITS_ONLY = /^\d+$/;
 
 /**
- * Who participates in a program, and what each person pledged to it. The
- * same person can pledge different amounts to different programs, which is
- * why the rate lives here and not on Person.
+ * Who participates in a program, and what each contributor pledged to it. The
+ * same contributor can pledge different amounts to different programs, which is
+ * why the rate lives here and not on Contributor.
  *
- * Exported for PaymentModule (a person can only pay a program they are
+ * Exported for PaymentModule (a contributor can only pay a program they are
  * enrolled in — also a database fact, via Payment's composite FK) and
  * EradatModule (the grid pages through enrollments).
  */
@@ -35,16 +35,16 @@ export class EnrollmentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly programService: ProgramService,
-    private readonly personService: PersonService,
+    private readonly contributorService: ContributorService,
   ) {}
 
   /**
    * One cursor page of a program's enrollments; the grid adds payment cells
    * to these. The caller has already resolved the program.
    *
-   * Enrollments never point at a deleted person by construction — deleting a
-   * person is refused while they have any, and a merge moves them first — so
-   * no person filter is needed here.
+   * Enrollments never point at a deleted contributor by construction:
+   * deleting a contributor is refused while they have any, and a merge moves
+   * them first — so no contributor filter is needed here.
    */
   async listEnrollmentRows(
     programId: string,
@@ -55,7 +55,7 @@ export class EnrollmentService {
       where: {
         programId,
         ...(status ? { status } : {}),
-        ...(q ? { person: this.buildPersonSearch(q) } : {}),
+        ...(q ? { contributor: this.buildContributorSearch(q) } : {}),
       },
       orderBy: ENROLLMENT_ORDER_BY,
       take: limit + 1,
@@ -76,19 +76,19 @@ export class EnrollmentService {
     return { items: rows.map(toEnrollmentView), nextCursor };
   }
 
-  /** The person's enrollment in the program, or ENROLLMENT_NOT_FOUND. */
+  /** The contributor's enrollment in the program, or ENROLLMENT_NOT_FOUND. */
   async assertEnrolled(
     programId: string,
-    personId: string,
+    contributorId: string,
   ): Promise<EnrollmentRow> {
     const enrollment = await this.prisma.programEnrollment.findUnique({
-      where: { personId_programId: { personId, programId } },
+      where: { contributorId_programId: { contributorId, programId } },
       select: ENROLLMENT_SELECT,
     });
     if (!enrollment) {
       throw new AppException(
         'ENROLLMENT_NOT_FOUND',
-        { programId, personId },
+        { programId, contributorId },
         HttpStatus.NOT_FOUND,
       );
     }
@@ -97,33 +97,35 @@ export class EnrollmentService {
 
   async createEnrollment(programId: string, dto: CreateEnrollmentDto) {
     const program = await this.programService.assertProgramExists(programId);
-    // The FK would accept a soft-deleted or merged-away person; this would not.
-    if (dto.personId) await this.personService.assertPersonExists(dto.personId);
+    // The FK would accept a soft-deleted or merged-away contributor; this would
+    // not.
+    if (dto.contributorId)
+      await this.contributorService.assertContributorExists(dto.contributorId);
 
-    // One transaction: a new person and their enrollment land together, so a
-    // clash on the enrollment never leaves a half-made person behind.
-    const { enrollment, newPerson } = await this.prisma.$transaction(
+    // One transaction: a new contributor and their enrollment land together, so
+    // a clash on the enrollment never leaves a half-made contributor behind.
+    const { enrollment, newContributor } = await this.prisma.$transaction(
       async (tx) => {
-        const newPerson = dto.person
-          ? await this.personService.insertPerson(tx, dto.person)
+        const newContributor = dto.contributor
+          ? await this.contributorService.insertContributor(tx, dto.contributor)
           : null;
-        const personId = newPerson?.id ?? dto.personId;
-        // Unreachable past the DTO's refine (exactly one of person /
-        // personId); kept so the type narrows without a cast.
-        if (!personId) throw new AppException('VALIDATION_FAILED');
+        const contributorId = newContributor?.id ?? dto.contributorId;
+        // Unreachable past the DTO's refine (exactly one of contributor /
+        // contributorId); kept so the type narrows without a cast.
+        if (!contributorId) throw new AppException('VALIDATION_FAILED');
         try {
           const enrollment = await tx.programEnrollment.create({
             data: {
               programId,
-              personId,
+              contributorId,
               expectedRate: dto.expectedRate,
               previousSubscription: dto.previousSubscription ?? '0',
             },
             select: ENROLLMENT_SELECT,
           });
-          return { enrollment, newPerson };
+          return { enrollment, newContributor };
         } catch (err) {
-          // The unique (personId, programId) index is the dedupe.
+          // The unique (contributorId, programId) index is the dedupe.
           if (!isUniqueViolation(err)) throw err;
           throw new AppException(
             'ENROLLMENT_EXISTS',
@@ -134,12 +136,12 @@ export class EnrollmentService {
       },
     );
 
-    const possibleDuplicates = newPerson
-      ? await this.personService.flagPossibleDuplicates(newPerson)
+    const possibleDuplicates = newContributor
+      ? await this.contributorService.flagPossibleDuplicates(newContributor)
       : 0;
     return {
       ...toEnrollmentView(enrollment),
-      personName: enrollment.person.name,
+      contributorName: enrollment.contributor.name,
       programName: program.name,
       possibleDuplicates,
       successCode: 'ENROLLMENT_CREATE_SUCCESS',
@@ -159,7 +161,7 @@ export class EnrollmentService {
     });
     return {
       ...toEnrollmentView(enrollment),
-      personName: enrollment.person.name,
+      contributorName: enrollment.contributor.name,
       successCode: 'ENROLLMENT_UPDATE_SUCCESS',
     };
   }
@@ -185,15 +187,15 @@ export class EnrollmentService {
     );
     return {
       ...toEnrollmentView(enrollment),
-      personName: enrollment.person.name,
+      contributorName: enrollment.contributor.name,
       successCode: 'ENROLLMENT_MARK_DORMANT_SUCCESS',
     };
   }
 
   /**
-   * Undoes a mistaken enrollment. Refused once the person has paid anything
-   * to the program: from then on the enrollment anchors part of the books and
-   * can only go dormant.
+   * Undoes a mistaken enrollment. Refused once the contributor has paid
+   * anything to the program: from then on the enrollment anchors part of the
+   * books and can only go dormant.
    */
   async removeEnrollment(programId: string, enrollmentId: string) {
     const enrollment = await this.findEnrollmentOrThrow(
@@ -201,13 +203,13 @@ export class EnrollmentService {
       enrollmentId,
     );
     const payments = await this.prisma.payment.count({
-      where: { programId, personId: enrollment.personId },
+      where: { programId, contributorId: enrollment.contributorId },
     });
     if (payments > 0) throw this.hasPayments(payments);
 
     // Hard delete: with no payments the enrollment carries no history, and a
-    // tombstone would hold the (person, program) unique key and block
-    // enrolling the person again.
+    // tombstone would hold the (contributor, program) unique key and block
+    // enrolling the contributor again.
     try {
       await this.prisma.programEnrollment.delete({
         where: { id: enrollmentId },
@@ -220,7 +222,7 @@ export class EnrollmentService {
     }
     return {
       id: enrollmentId,
-      personName: enrollment.person.name,
+      contributorName: enrollment.contributor.name,
       successCode: 'ENROLLMENT_REMOVE_SUCCESS',
     };
   }
@@ -284,7 +286,7 @@ export class EnrollmentService {
     return enrollment;
   }
 
-  private buildPersonSearch(q: string): Prisma.PersonWhereInput {
+  private buildContributorSearch(q: string): Prisma.ContributorWhereInput {
     return {
       OR: [
         { name: { contains: q, mode: 'insensitive' } },

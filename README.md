@@ -2,9 +2,9 @@
 
 NestJS + Prisma 7 + Postgres API for the fund's revenue books. Every revenue
 stream is a **Program** — the fund's own membership (protected), مواساة,
-جامع السعيد, each campaign. Each human is one **Person**, linked to the
+جامع السعيد, each campaign. Each human is one **Contributor**, linked to the
 programs they pay into by a **ProgramEnrollment** that carries that program's
-pledge. **Payments** come from an enrolled person, another program, or a
+pledge. **Payments** come from an enrolled contributor, another program, or a
 free-text name for someone who is in no directory at all.
 
 ## Run it
@@ -43,29 +43,29 @@ never a specific user — so a second role (say, a collector) is an `INSERT INTO
 
 ## Layout
 
-| Path                | Owns                                                                                              |
-| ------------------- | ------------------------------------------------------------------------------------------------- |
-| `src/auth/`         | Login, refresh, logout, password change; `AuthGuard`; permissions (`auth.constant.ts`)            |
-| `src/users/`        | The account list: create, switch on/off, reset another's password                                 |
-| `src/programs/`     | Programs; protection rules for the fund's membership program; entry mode (`program.util.ts`)      |
-| `src/cycles/`       | Each program's own cycles; `resolveWindow` — which years a program's books open on and accept     |
-| `src/people/`       | People directory; the duplicate review queue — matching rules in `person-duplicate.util.ts`       |
-| `src/enrollments/`  | Who is in which program, with that program's pledge and previous subscription                     |
-| `src/payments/`     | Monthly cells (amount / ★ / clear) and dated ledger entries                                       |
-| `src/eradat/`       | Read side: per-program summary, grid lines, transfer lines, ledger; formulas in `revenue.util.ts` |
-| `src/common/`       | `AppException`, global filter/interceptor, env schema, access decorators, money/date schemas      |
-| `src/prisma/`       | `PrismaService` (soft-delete filtered) + extension                                                |
-| `src/scripts/`      | `create:user`, `seed:demo`, `migrate:legacy-eradat` — all dry-run unless `--apply`                |
-| `src/i18n/{en,ar}/` | Every success/error message, in English and Arabic                                                |
-| `prisma/`           | `schema.prisma` (layout map at the top) and the hand-written baseline migration                   |
+| Path                | Owns                                                                                                   |
+| ------------------- | ------------------------------------------------------------------------------------------------------ |
+| `src/auth/`         | Login, refresh, logout, password change; `AuthGuard`; permissions (`auth.constant.ts`)                 |
+| `src/users/`        | The account list: create, switch on/off, reset another's password                                      |
+| `src/programs/`     | Programs; protection rules for the fund's membership program; entry mode (`program.util.ts`)           |
+| `src/cycles/`       | Each program's own cycles; `resolveWindow` — which years a program's books open on and accept          |
+| `src/contributors/` | Contributors directory; the duplicate review queue — matching rules in `contributor-duplicate.util.ts` |
+| `src/enrollments/`  | Who is in which program, with that program's pledge and previous subscription                          |
+| `src/payments/`     | Monthly cells (amount / ★ / clear) and dated ledger entries                                            |
+| `src/eradat/`       | Read side: per-program summary, grid lines, transfer lines, ledger; formulas in `revenue.util.ts`      |
+| `src/common/`       | `AppException`, global filter/interceptor, env schema, access decorators, money/date schemas           |
+| `src/prisma/`       | `PrismaService` (soft-delete filtered) + extension                                                     |
+| `src/scripts/`      | `create:user`, `seed:demo`, `migrate:legacy-eradat` — all dry-run unless `--apply`                     |
+| `src/i18n/{en,ar}/` | Every success/error message, in English and Arabic                                                     |
+| `prisma/`           | `schema.prisma` (layout map at the top) and the hand-written SQL migrations                            |
 
 ## How the books work
 
 - **Entry mode.** A `PERIODIC` program with cycles keeps the monthly grid of
   the workbook (one cell per payer per month, ★ = paid but recorded under
   another month, counts 0). Every other program keeps a dated ledger.
-- **Payers.** Exactly one of: an enrolled person, another program, or a
-  free-text name — enforced by a CHECK. A person payer must be enrolled in the
+- **Payers.** Exactly one of: an enrolled contributor, another program, or a
+  free-text name — enforced by a CHECK. A contributor payer must be enrolled in the
   receiving program — enforced by a composite foreign key.
 - **Program → program payments** (the fund paying مواساة or a campaign) are
   revenue of the receiving program only, never of the payer. They show as
@@ -73,10 +73,10 @@ never a specific user — so a second role (say, a collector) is an `INSERT INTO
   `TODO(expenses)`: once an Expenses module exists, the same transaction must
   also be booked as the payer's expense, linked to the payment.
 - **Collection ratio** is per program: the sum of its enrollments' pledges ÷
-  that year's payments by enrolled people. Transfers and one-off gifts are
+  that year's payments by enrolled contributors. Transfers and one-off gifts are
   revenue but answer no pledge, so they stay out of the ratio.
-- **Duplicates are never merged automatically.** Saving a person, and
-  `POST /people/duplicates/scan`, raise review flags; a person merges or
+- **Duplicates are never merged automatically.** Saving a contributor, and
+  `POST /contributors/duplicates/scan`, raise review flags; a reviewer merges or
   dismisses each one. Merging moves the other record's enrollments (and, by
   the FK's `ON UPDATE CASCADE`, its payments) and retires its account number.
 
@@ -89,12 +89,12 @@ never a specific user — so a second role (say, a collector) is an `INSERT INTO
 | `GET/POST /programs`, `GET/PATCH/DELETE /programs/:id`                                                  | Programs (the protected one refuses delete/reshape) |
 | `GET/POST …/:id/cycles`, `GET …/cycles/current`, `PATCH …/cycles/:cid`, `POST …/cycles/:cid/activate`   | A program's cycles                                  |
 | `GET/POST …/:id/enrollments`, `PATCH/DELETE …/enrollments/:eid`, `POST …/enrollments/:eid/mark-dormant` | Enrollments                                         |
-| `PUT/DELETE …/:id/cells/people/:personId/:year/:month`                                                  | A person's grid cell                                |
+| `PUT/DELETE …/:id/cells/contributors/:contributorId/:year/:month`                                       | A contributor's grid cell                           |
 | `PUT/DELETE …/:id/cells/programs/:payerProgramId/:year/:month`                                          | Another program's grid cell                         |
 | `POST …/:id/payments`, `DELETE …/:id/payments/:paymentId`                                               | Dated ledger entries                                |
 | `GET …/:id/summary`, `…/lines`, `…/transfer-lines`, `…/payments`                                        | Read side                                           |
-| `GET/POST /people`, `GET/PATCH/DELETE /people/:id`                                                      | People                                              |
-| `GET /people/duplicates`, `POST …/scan`, `POST …/:fid/merge`, `POST …/:fid/dismiss`                     | Duplicate review                                    |
+| `GET/POST /contributors`, `GET/PATCH/DELETE /contributors/:id`                                          | Contributors                                        |
+| `GET /contributors/duplicates`, `POST …/scan`, `POST …/:fid/merge`, `POST …/:fid/dismiss`               | Duplicate review                                    |
 
 (`…` = `/programs`.)
 

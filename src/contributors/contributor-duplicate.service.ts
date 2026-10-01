@@ -11,17 +11,20 @@ import {
   findDuplicatePairs,
   orderedPair,
   type DuplicatePair,
-  type PersonKey,
-} from './person-duplicate.util';
-import { PERSON_DETAIL_SELECT, PERSON_SCAN_CAP } from './person.constant';
-import { toPersonDetailView } from './person.util';
+  type ContributorKey,
+} from './contributor-duplicate.util';
+import {
+  CONTRIBUTOR_DETAIL_SELECT,
+  CONTRIBUTOR_SCAN_CAP,
+} from './contributor.constant';
+import { toContributorDetailView } from './contributor.util';
 
-const FLAG_PERSON_SELECT = {
-  ...PERSON_DETAIL_SELECT,
+const FLAG_CONTRIBUTOR_SELECT = {
+  ...CONTRIBUTOR_DETAIL_SELECT,
   // A resolved flag still shows both records; the merged one is retired.
   isDeleted: true,
   mergedIntoId: true,
-} satisfies Prisma.PersonSelect;
+} satisfies Prisma.ContributorSelect;
 
 const FLAG_SELECT = {
   id: true,
@@ -30,35 +33,35 @@ const FLAG_SELECT = {
   createdAt: true,
   resolvedAt: true,
   resolvedBy: { select: { name: true } },
-  personA: { select: FLAG_PERSON_SELECT },
-  personB: { select: FLAG_PERSON_SELECT },
-} satisfies Prisma.PersonDuplicateFlagSelect;
+  contributorA: { select: FLAG_CONTRIBUTOR_SELECT },
+  contributorB: { select: FLAG_CONTRIBUTOR_SELECT },
+} satisfies Prisma.ContributorDuplicateFlagSelect;
 
-type FlagRow = Prisma.PersonDuplicateFlagGetPayload<{
+type FlagRow = Prisma.ContributorDuplicateFlagGetPayload<{
   select: typeof FLAG_SELECT;
 }>;
-type FlagPersonRow = FlagRow['personA'];
+type FlagContributorRow = FlagRow['contributorA'];
 
-function toFlagPersonView({
+function toFlagContributorView({
   isDeleted,
   mergedIntoId,
-  ...person
-}: FlagPersonRow) {
-  return { ...toPersonDetailView(person), isDeleted, mergedIntoId };
+  ...contributor
+}: FlagContributorRow) {
+  return { ...toContributorDetailView(contributor), isDeleted, mergedIntoId };
 }
 
 function toFlagView(flag: FlagRow) {
   return {
     ...flag,
-    personA: toFlagPersonView(flag.personA),
-    personB: toFlagPersonView(flag.personB),
+    contributorA: toFlagContributorView(flag.contributorA),
+    contributorB: toFlagContributorView(flag.contributorB),
   };
 }
 
 // Each statement of a merge runs on the transaction client.
 type MergeClient = Pick<
   PrismaService,
-  'person' | 'programEnrollment' | 'personDuplicateFlag'
+  'contributor' | 'programEnrollment' | 'contributorDuplicateFlag'
 >;
 
 const FLAG_INSERT_BATCH = 500;
@@ -66,68 +69,68 @@ const FLAG_INSERT_BATCH = 500;
 class ScanTooLargeError extends AppException {
   constructor() {
     super(
-      'PERSON_SCAN_TOO_LARGE',
-      { limit: PERSON_SCAN_CAP },
+      'CONTRIBUTOR_SCAN_TOO_LARGE',
+      { limit: CONTRIBUTOR_SCAN_CAP },
       HttpStatus.CONFLICT,
     );
   }
 }
 
 /**
- * The duplicate-person review queue. A scan *proposes* pairs
- * (person-duplicate.util.ts) and stores them as OPEN flags; a person then
- * confirms (merge) or rejects (dismiss) each one. Nothing merges on a match.
- * Migrations and imports create one Person per source row and leave the
- * identity question to this queue.
+ * The duplicate-contributor review queue. A scan *proposes* pairs
+ * (contributor-duplicate.util.ts) and stores them as OPEN flags; a reviewer
+ * then confirms (merge) or rejects (dismiss) each one. Nothing merges on a
+ * match. Migrations and imports create one Contributor per source row and leave
+ * the identity question to this queue.
  *
- * Exported for PersonService, which checks each new or renamed person against
- * everyone else as it is saved.
+ * Exported for ContributorService, which checks each new or renamed contributor
+ * against everyone else as it is saved.
  */
 @Injectable()
-export class PersonDuplicateService {
-  private readonly logger = new Logger(PersonDuplicateService.name);
+export class ContributorDuplicateService {
+  private readonly logger = new Logger(ContributorDuplicateService.name);
 
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Flags `person` against every other live person. Returns how many new flags it raised. */
-  async flagPossibleDuplicates(person: PersonKey): Promise<number> {
-    let others: PersonKey[];
+  /** Flags `contributor` against every other live contributor. Returns how many new flags it raised. */
+  async flagPossibleDuplicates(contributor: ContributorKey): Promise<number> {
+    let others: ContributorKey[];
     try {
-      others = await this.loadScanPeople();
+      others = await this.loadScanContributors();
     } catch (err) {
-      // The person is already saved; failing their save over an advisory
+      // The contributor is already saved; failing their save over an advisory
       // check would be worse than skipping it. The full scan still covers them.
       if (!(err instanceof ScanTooLargeError)) throw err;
       this.logger.warn(
-        `Skipped duplicate check for person ${person.id}: ${errorMessage(err)}`,
+        `Skipped duplicate check for contributor ${contributor.id}: ${errorMessage(err)}`,
       );
       return 0;
     }
     const flags = others.flatMap((other) => {
-      const reasons = duplicateReasons(person, other);
+      const reasons = duplicateReasons(contributor, other);
       return reasons.length > 0
-        ? [{ ...orderedPair(person.id, other.id), reasons }]
+        ? [{ ...orderedPair(contributor.id, other.id), reasons }]
         : [];
     });
     return this.insertFlags(flags);
   }
 
-  /** Compares every live person with every other and raises flags for new candidate pairs. */
+  /** Compares every live contributor with every other and raises flags for new candidate pairs. */
   async scanAll() {
-    const people = await this.loadScanPeople();
-    const pairs = findDuplicatePairs(people);
+    const contributors = await this.loadScanContributors();
+    const pairs = findDuplicatePairs(contributors);
     const newFlags = await this.insertFlags(pairs);
     return {
-      scanned: people.length,
+      scanned: contributors.length,
       candidates: pairs.length,
       newFlags,
-      successCode: 'PERSON_DUPLICATE_SCAN_SUCCESS',
+      successCode: 'CONTRIBUTOR_DUPLICATE_SCAN_SUCCESS',
     };
   }
 
   async listFlags({ cursor, limit, status }: ListDuplicatesQueryDto) {
     const [found, openCount] = await Promise.all([
-      this.prisma.personDuplicateFlag.findMany({
+      this.prisma.contributorDuplicateFlag.findMany({
         where: { status },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         // One extra row says whether another page exists without a count().
@@ -135,7 +138,7 @@ export class PersonDuplicateService {
         ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
         select: FLAG_SELECT,
       }),
-      this.prisma.personDuplicateFlag.count({ where: { status: 'OPEN' } }),
+      this.prisma.contributorDuplicateFlag.count({ where: { status: 'OPEN' } }),
     ]);
     const hasMore = found.length > limit;
     const rows = hasMore ? found.slice(0, limit) : found;
@@ -150,7 +153,7 @@ export class PersonDuplicateService {
   async dismissFlag(userId: string, flagId: string) {
     // The conditional update is the decision: two reviewers racing on one
     // flag both run this and exactly one wins.
-    const { count } = await this.prisma.personDuplicateFlag.updateMany({
+    const { count } = await this.prisma.contributorDuplicateFlag.updateMany({
       where: { id: flagId, status: 'OPEN' },
       data: {
         status: 'DISMISSED',
@@ -161,7 +164,7 @@ export class PersonDuplicateService {
     if (count === 0) await this.explainUnclaimable(this.prisma, flagId);
     return {
       ...(await this.getFlag(flagId)),
-      successCode: 'PERSON_DUPLICATE_DISMISS_SUCCESS',
+      successCode: 'CONTRIBUTOR_DUPLICATE_DISMISS_SUCCESS',
     };
   }
 
@@ -172,15 +175,15 @@ export class PersonDuplicateService {
    *
    * Refused when both records are enrolled in the same program: their
    * pledges, previous subscriptions and possibly the same months would
-   * collide, and which figures are right is a call for a person to make —
+   * collide, and which figures are right is a call for a reviewer to make —
    * by removing or correcting one enrollment first.
    */
   async mergeFlag(userId: string, flagId: string, dto: MergeDuplicateDto) {
     // One transaction: claiming the flag, retiring one record and moving its
     // enrollments commit together or not at all — a half-done merge would
-    // leave payments under a retired person.
+    // leave payments under a retired contributor.
     const merged = await this.prisma.$transaction(async (tx) => {
-      const { count } = await tx.personDuplicateFlag.updateMany({
+      const { count } = await tx.contributorDuplicateFlag.updateMany({
         where: { id: flagId, status: 'OPEN' },
         data: {
           status: 'MERGED',
@@ -190,67 +193,78 @@ export class PersonDuplicateService {
       });
       if (count === 0) await this.explainUnclaimable(tx, flagId);
 
-      const flag = await tx.personDuplicateFlag.findUniqueOrThrow({
+      const flag = await tx.contributorDuplicateFlag.findUniqueOrThrow({
         where: { id: flagId },
-        select: { personAId: true, personBId: true },
+        select: { contributorAId: true, contributorBId: true },
       });
       if (
-        dto.keepPersonId !== flag.personAId &&
-        dto.keepPersonId !== flag.personBId
+        dto.keepContributorId !== flag.contributorAId &&
+        dto.keepContributorId !== flag.contributorBId
       ) {
         throw new AppException('DUPLICATE_MERGE_KEEP_INVALID', {
-          keepPersonId: dto.keepPersonId,
+          keepContributorId: dto.keepContributorId,
         });
       }
-      const dropPersonId =
-        dto.keepPersonId === flag.personAId ? flag.personBId : flag.personAId;
-      return this.mergePeople(tx, dto.keepPersonId, dropPersonId);
+      const dropContributorId =
+        dto.keepContributorId === flag.contributorAId
+          ? flag.contributorBId
+          : flag.contributorAId;
+      return this.mergeContributors(
+        tx,
+        dto.keepContributorId,
+        dropContributorId,
+      );
     });
     return {
       ...(await this.getFlag(flagId)),
       ...merged,
-      successCode: 'PERSON_DUPLICATE_MERGE_SUCCESS',
+      successCode: 'CONTRIBUTOR_DUPLICATE_MERGE_SUCCESS',
     };
   }
 
-  private async mergePeople(
+  private async mergeContributors(
     tx: MergeClient,
-    keepPersonId: string,
-    dropPersonId: string,
+    keepContributorId: string,
+    dropContributorId: string,
   ) {
     // Retire the merged-away record first, conditionally. The row lock this
-    // takes serialises against any other merge touching the same person, and
-    // a record another reviewer already merged away fails here rather than
+    // takes serialises against any other merge touching the same contributor,
+    // and a record another reviewer already merged away fails here rather than
     // being merged twice. updateMany is not soft-delete filtered, hence the
     // explicit isDeleted.
-    const retired = await tx.person.updateMany({
-      where: { id: dropPersonId, isDeleted: false },
+    const retired = await tx.contributor.updateMany({
+      where: { id: dropContributorId, isDeleted: false },
       data: {
         isDeleted: true,
         deletedAt: new Date(),
-        mergedIntoId: keepPersonId,
+        mergedIntoId: keepContributorId,
       },
     });
-    const kept = await tx.person.findFirst({
-      where: { id: keepPersonId, isDeleted: false },
+    const kept = await tx.contributor.findFirst({
+      where: { id: keepContributorId, isDeleted: false },
       select: { id: true, phone: true, email: true },
     });
     if (retired.count === 0 || !kept) {
-      throw new AppException('DUPLICATE_PERSON_GONE', {}, HttpStatus.CONFLICT);
+      throw new AppException(
+        'DUPLICATE_CONTRIBUTOR_GONE',
+        {},
+        HttpStatus.CONFLICT,
+      );
     }
 
-    // Bounded by the number of programs: one enrollment per person per program.
+    // Bounded by the number of programs: one enrollment per contributor per
+    // program.
     const keepEnrollments = await tx.programEnrollment.findMany({
-      where: { personId: keepPersonId },
+      where: { contributorId: keepContributorId },
       select: { programId: true },
     });
     const dropEnrollments = await tx.programEnrollment.findMany({
-      where: { personId: dropPersonId },
+      where: { contributorId: dropContributorId },
       select: { programId: true, program: { select: { name: true } } },
     });
     const keepPrograms = new Set(keepEnrollments.map((e) => e.programId));
     assertNoBlockers(
-      'PERSON_MERGE_CONFLICT',
+      'CONTRIBUTOR_MERGE_CONFLICT',
       dropEnrollments
         .filter((e) => keepPrograms.has(e.programId))
         .map((e) => ({
@@ -260,22 +274,22 @@ export class PersonDuplicateService {
         })),
     );
 
-    // ON UPDATE CASCADE on Payment's (personId, programId) FK re-points every
-    // payment of each moved enrollment in this same statement.
+    // ON UPDATE CASCADE on Payment's (contributorId, programId) FK re-points
+    // every payment of each moved enrollment in this same statement.
     const moved = await tx.programEnrollment.updateMany({
-      where: { personId: dropPersonId },
-      data: { personId: keepPersonId },
+      where: { contributorId: dropContributorId },
+      data: { contributorId: keepContributorId },
     });
 
     // The kept record wins every field it has; it only gains contact details
     // it was missing.
-    const dropped = await tx.person.findUniqueOrThrow({
-      where: { id: dropPersonId },
+    const dropped = await tx.contributor.findUniqueOrThrow({
+      where: { id: dropContributorId },
       select: { phone: true, email: true },
     });
     if ((!kept.phone && dropped.phone) || (!kept.email && dropped.email)) {
-      await tx.person.update({
-        where: { id: keepPersonId },
+      await tx.contributor.update({
+        where: { id: keepContributorId },
         data: {
           phone: kept.phone ?? dropped.phone,
           email: kept.email ?? dropped.email,
@@ -286,23 +300,26 @@ export class PersonDuplicateService {
     // Other open suggestions about the retired record are moot: a rescan
     // raises any (kept, X) pair that still looks alike. Decided flags stay as
     // the record of who decided what.
-    await tx.personDuplicateFlag.deleteMany({
+    await tx.contributorDuplicateFlag.deleteMany({
       where: {
         status: 'OPEN',
-        OR: [{ personAId: dropPersonId }, { personBId: dropPersonId }],
+        OR: [
+          { contributorAId: dropContributorId },
+          { contributorBId: dropContributorId },
+        ],
       },
     });
 
     return {
-      keptPersonId: keepPersonId,
-      mergedPersonId: dropPersonId,
+      keptContributorId: keepContributorId,
+      mergedContributorId: dropContributorId,
       movedEnrollments: moved.count,
     };
   }
 
   private async getFlag(flagId: string) {
     return toFlagView(
-      await this.prisma.personDuplicateFlag.findUniqueOrThrow({
+      await this.prisma.contributorDuplicateFlag.findUniqueOrThrow({
         where: { id: flagId },
         select: FLAG_SELECT,
       }),
@@ -312,10 +329,10 @@ export class PersonDuplicateService {
   // Why a conditional claim matched nothing: no such flag (404), or someone
   // already decided it (409, naming how).
   private async explainUnclaimable(
-    db: Pick<PrismaService, 'personDuplicateFlag'>,
+    db: Pick<PrismaService, 'contributorDuplicateFlag'>,
     flagId: string,
   ): Promise<never> {
-    const flag = await db.personDuplicateFlag.findUnique({
+    const flag = await db.contributorDuplicateFlag.findUnique({
       where: { id: flagId },
       select: { status: true },
     });
@@ -333,24 +350,25 @@ export class PersonDuplicateService {
     );
   }
 
-  private async loadScanPeople(): Promise<PersonKey[]> {
+  private async loadScanContributors(): Promise<ContributorKey[]> {
     // Soft-delete filtered: retired and merged records are never candidates.
-    const people = await this.prisma.person.findMany({
+    const contributors = await this.prisma.contributor.findMany({
       orderBy: { id: 'asc' },
-      take: PERSON_SCAN_CAP + 1,
+      take: CONTRIBUTOR_SCAN_CAP + 1,
       select: { id: true, name: true, accountNumber: true },
     });
-    if (people.length > PERSON_SCAN_CAP) throw new ScanTooLargeError();
-    return people;
+    if (contributors.length > CONTRIBUTOR_SCAN_CAP)
+      throw new ScanTooLargeError();
+    return contributors;
   }
 
-  // The unique (personAId, personBId) index is the dedupe: a pair raised
-  // before — open, merged or dismissed — is skipped, so a dismissed pair
+  // The unique (contributorAId, contributorBId) index is the dedupe: a pair
+  // raised before — open, merged or dismissed — is skipped, so a dismissed pair
   // never comes back.
   private async insertFlags(flags: DuplicatePair[]): Promise<number> {
     let inserted = 0;
     for (let offset = 0; offset < flags.length; offset += FLAG_INSERT_BATCH) {
-      const { count } = await this.prisma.personDuplicateFlag.createMany({
+      const { count } = await this.prisma.contributorDuplicateFlag.createMany({
         data: flags.slice(offset, offset + FLAG_INSERT_BATCH),
         skipDuplicates: true,
       });

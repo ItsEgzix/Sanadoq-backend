@@ -11,7 +11,7 @@ type Where = Record<string, unknown>;
 // books and the assertions read like the sheet.
 interface FakePayment {
   programId: string;
-  payer: 'person' | 'program' | 'freetext';
+  payer: 'contributor' | 'program' | 'freetext';
   payerProgramId?: string;
   year: number;
   month: number | null;
@@ -29,7 +29,7 @@ function matches(payment: FakePayment, where: Where): boolean {
       return false;
     if (typeof filter === 'object' && payment.payer !== 'program') return false;
   }
-  if ('personId' in where && payment.payer !== 'person') return false;
+  if ('contributorId' in where && payment.payer !== 'contributor') return false;
   if ('payerNameFreetext' in where && payment.payer !== 'freetext')
     return false;
   const year = where.year as number | { gte: number; lte: number };
@@ -126,14 +126,14 @@ describe('EradatSummaryService', () => {
       fakeGroupBy([
         {
           programId: 'fund',
-          payer: 'person',
+          payer: 'contributor',
           year: 2026,
           month: 1,
           amount: 3000,
         },
         {
           programId: 'fund',
-          payer: 'person',
+          payer: 'contributor',
           year: 2026,
           month: 2,
           amount: null,
@@ -235,14 +235,14 @@ describe('EradatSummaryService', () => {
       fakeGroupBy([
         {
           programId: 'fund',
-          payer: 'person',
+          payer: 'contributor',
           year: 2026,
           month: 3,
           amount: 1200,
         },
         {
           programId: 'fund',
-          payer: 'person',
+          payer: 'contributor',
           year: 2026,
           month: 4,
           amount: null,
@@ -250,7 +250,7 @@ describe('EradatSummaryService', () => {
         },
         {
           programId: 'fund',
-          payer: 'person',
+          payer: 'contributor',
           year: 2026,
           month: 4,
           amount: null,

@@ -1,6 +1,6 @@
 import { createZodDto } from 'nestjs-zod';
 import { moneySchema } from 'src/common/schemas/money.schema';
-import { createPersonSchema } from 'src/people/dto/create-person.dto';
+import { createContributorSchema } from 'src/contributors/dto/create-contributor.dto';
 import { z } from 'zod';
 
 // No `status`: enrollments start ACTIVE, go dormant through POST
@@ -13,21 +13,22 @@ import { z } from 'zod';
 export const createEnrollmentSchema = z
   .object({
     // Enroll someone already in the directory…
-    personId: z.string().min(1).max(64).optional(),
-    // …or create them in the same step. The new person is checked for
+    contributorId: z.string().min(1).max(64).optional(),
+    // …or create them in the same step. The new contributor is checked for
     // likely duplicates after saving, never merged.
-    person: createPersonSchema.optional(),
-    // This person's pledge to this program, per year. Zero for no pledge.
+    contributor: createContributorSchema.optional(),
+    // This contributor's pledge to this program, per year. Zero for no pledge.
     expectedRate: moneySchema,
     // Typed in from the old books; never computed. Omitted: zero.
     previousSubscription: moneySchema.optional(),
   })
   .refine(
-    (dto) => (dto.personId === undefined) !== (dto.person === undefined),
+    (dto) =>
+      (dto.contributorId === undefined) !== (dto.contributor === undefined),
     {
       message:
-        'Give either an existing personId or a new person — exactly one.',
-      path: ['personId'],
+        'Give either an existing contributorId or a new contributor — exactly one.',
+      path: ['contributorId'],
     },
   );
 

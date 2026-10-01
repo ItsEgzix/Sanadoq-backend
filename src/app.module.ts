@@ -14,7 +14,7 @@ import { CycleModule } from './cycles/cycle.module';
 import { EnrollmentModule } from './enrollments/enrollment.module';
 import { EradatModule } from './eradat/eradat.module';
 import { PaymentModule } from './payments/payment.module';
-import { PersonModule } from './people/person.module';
+import { ContributorModule } from './contributors/contributor.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProgramModule } from './programs/program.module';
 import { UserModule } from './users/user.module';
@@ -45,7 +45,7 @@ import { UserModule } from './users/user.module';
     UserModule,
     ProgramModule,
     CycleModule,
-    PersonModule,
+    ContributorModule,
     EnrollmentModule,
     PaymentModule,
     EradatModule,

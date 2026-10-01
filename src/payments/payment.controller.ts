@@ -6,7 +6,7 @@ import {
   type CurrentUserPayload,
 } from 'src/common/decorators/current-user.decorator';
 import {
-  PersonCellParamsDto,
+  ContributorCellParamsDto,
   ProgramCellParamsDto,
 } from './dto/cell-params.dto';
 import { RecordPaymentDto } from './dto/record-payment.dto';
@@ -18,8 +18,8 @@ import { PaymentService } from './payment.service';
  *
  * Monthly grid — one cell per URL, PUT sets it (amount or ★), DELETE empties
  * it; both idempotent, so the grid can retry a save without double-booking:
- *   …/cells/people/:personId/:year/:month          an enrolled person's row
- *   …/cells/programs/:payerProgramId/:year/:month  another program's row
+ *   …/cells/contributors/:contributorId/:year/:month  an enrolled contributor
+ *   …/cells/programs/:payerProgramId/:year/:month     another program's row
  *
  * Dated ledger — POST …/payments records an entry (idempotent through the
  * form's idempotencyKey), DELETE …/payments/:paymentId removes one.
@@ -29,28 +29,30 @@ import { PaymentService } from './payment.service';
 export class PaymentController {
   constructor(private readonly paymentService: PaymentService) {}
 
-  @Put('cells/people/:personId/:year/:month')
-  async setPersonCell(
+  @Put('cells/contributors/:contributorId/:year/:month')
+  async setContributorCell(
     @CurrentUser() user: CurrentUserPayload,
-    @Param() { programId, personId, year, month }: PersonCellParamsDto,
+    @Param()
+    { programId, contributorId, year, month }: ContributorCellParamsDto,
     @Body() setCellDto: SetCellDto,
   ) {
     return this.paymentService.setCell(
       user.userId,
       programId,
-      { kind: 'PERSON', personId },
+      { kind: 'CONTRIBUTOR', contributorId },
       { year, month },
       setCellDto,
     );
   }
 
-  @Delete('cells/people/:personId/:year/:month')
-  async clearPersonCell(
-    @Param() { programId, personId, year, month }: PersonCellParamsDto,
+  @Delete('cells/contributors/:contributorId/:year/:month')
+  async clearContributorCell(
+    @Param()
+    { programId, contributorId, year, month }: ContributorCellParamsDto,
   ) {
     return this.paymentService.clearCell(
       programId,
-      { kind: 'PERSON', personId },
+      { kind: 'CONTRIBUTOR', contributorId },
       { year, month },
     );
   }

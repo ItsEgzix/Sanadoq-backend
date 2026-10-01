@@ -11,8 +11,8 @@ import type { CookieOptions } from 'express';
  * *permission* is a code change by nature — something has to enforce it.
  */
 export const PERMISSIONS = {
-  // Everything about the fund's books today: programs, people, enrollments,
-  // payments, duplicate review, and the user list.
+  // Everything about the fund's books today: programs, contributors,
+  // enrollments, payments, duplicate review, and the user list.
   MANAGE_FUND: 'MANAGE_FUND',
 } as const;
 

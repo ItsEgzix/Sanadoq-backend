@@ -1,5 +1,5 @@
 import { Prisma } from 'generated/prisma/client';
-import type { PersonService } from 'src/people/person.service';
+import type { ContributorService } from 'src/contributors/contributor.service';
 import type { ProgramService } from 'src/programs/program.service';
 import type { PrismaService } from 'src/prisma/prisma.service';
 import { EnrollmentService } from '../enrollment.service';
@@ -18,13 +18,13 @@ const mockPrisma = {
   payment: { count: jest.fn() },
 };
 const mockProgramService = { assertProgramExists: jest.fn() };
-const mockPersonService = {
-  assertPersonExists: jest.fn(),
-  insertPerson: jest.fn(),
+const mockContributorService = {
+  assertContributorExists: jest.fn(),
+  insertContributor: jest.fn(),
   flagPossibleDuplicates: jest.fn(),
 };
 
-const PERSON = {
+const CONTRIBUTOR = {
   id: 'p1',
   name: 'Test',
   accountNumber: '2401007',
@@ -33,12 +33,12 @@ const PERSON = {
 };
 const ENROLLMENT = {
   id: 'e1',
-  personId: 'p1',
+  contributorId: 'p1',
   programId: 'fund',
   expectedRate: new Prisma.Decimal(6000),
   previousSubscription: new Prisma.Decimal(0),
   status: 'ACTIVE' as const,
-  person: PERSON,
+  contributor: CONTRIBUTOR,
 };
 
 const prismaError = (code: string) =>
@@ -63,30 +63,33 @@ describe('EnrollmentService', () => {
     service = new EnrollmentService(
       mockPrisma as unknown as PrismaService,
       mockProgramService as unknown as ProgramService,
-      mockPersonService as unknown as PersonService,
+      mockContributorService as unknown as ContributorService,
     );
   });
 
   describe('createEnrollment', () => {
-    it('creates a new person and enrolls them in one transaction, then checks for duplicates after commit', async () => {
-      mockPersonService.insertPerson.mockResolvedValue(PERSON);
+    it('creates a new contributor and enrolls them in one transaction, then checks for duplicates after commit', async () => {
+      mockContributorService.insertContributor.mockResolvedValue(CONTRIBUTOR);
       mockPrisma.programEnrollment.create.mockResolvedValue(ENROLLMENT);
-      mockPersonService.flagPossibleDuplicates.mockResolvedValue(1);
+      mockContributorService.flagPossibleDuplicates.mockResolvedValue(1);
 
       const result = await service.createEnrollment('fund', {
-        person: { name: 'Test', accountNumber: '2401007' },
+        contributor: { name: 'Test', accountNumber: '2401007' },
         expectedRate: '6000',
       });
 
-      expect(mockPersonService.insertPerson).toHaveBeenCalledWith(mockPrisma, {
-        name: 'Test',
-        accountNumber: '2401007',
-      });
+      expect(mockContributorService.insertContributor).toHaveBeenCalledWith(
+        mockPrisma,
+        {
+          name: 'Test',
+          accountNumber: '2401007',
+        },
+      );
       expect(mockPrisma.programEnrollment.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: {
             programId: 'fund',
-            personId: 'p1',
+            contributorId: 'p1',
             expectedRate: '6000',
             previousSubscription: '0',
           },
@@ -94,7 +97,8 @@ describe('EnrollmentService', () => {
       );
       const txDone = mockPrisma.$transaction.mock.invocationCallOrder[0];
       const flagged =
-        mockPersonService.flagPossibleDuplicates.mock.invocationCallOrder[0];
+        mockContributorService.flagPossibleDuplicates.mock
+          .invocationCallOrder[0];
       expect(flagged).toBeGreaterThan(txDone);
       expect(result).toMatchObject({
         expectedRate: '6000.00',
@@ -103,17 +107,21 @@ describe('EnrollmentService', () => {
       });
     });
 
-    it('enrolls an existing person without a duplicate check — they were checked when saved', async () => {
+    it('enrolls an existing contributor without a duplicate check — they were checked when saved', async () => {
       mockPrisma.programEnrollment.create.mockResolvedValue(ENROLLMENT);
 
       await service.createEnrollment('fund', {
-        personId: 'p1',
+        contributorId: 'p1',
         expectedRate: '6000',
       });
 
-      expect(mockPersonService.assertPersonExists).toHaveBeenCalledWith('p1');
-      expect(mockPersonService.insertPerson).not.toHaveBeenCalled();
-      expect(mockPersonService.flagPossibleDuplicates).not.toHaveBeenCalled();
+      expect(
+        mockContributorService.assertContributorExists,
+      ).toHaveBeenCalledWith('p1');
+      expect(mockContributorService.insertContributor).not.toHaveBeenCalled();
+      expect(
+        mockContributorService.flagPossibleDuplicates,
+      ).not.toHaveBeenCalled();
     });
 
     it('answers ENROLLMENT_EXISTS for a second enrollment in the same program', async () => {
@@ -122,13 +130,16 @@ describe('EnrollmentService', () => {
       );
 
       await expect(
-        service.createEnrollment('fund', { personId: 'p1', expectedRate: '1' }),
+        service.createEnrollment('fund', {
+          contributorId: 'p1',
+          expectedRate: '1',
+        }),
       ).rejects.toMatchObject({ errorCode: 'ENROLLMENT_EXISTS' });
     });
   });
 
   describe('removeEnrollment', () => {
-    it('refuses once the person has paid anything into the program, and deletes nothing', async () => {
+    it('refuses once the contributor has paid anything into the program, and deletes nothing', async () => {
       mockPrisma.payment.count.mockResolvedValue(4);
 
       await expect(
@@ -138,7 +149,7 @@ describe('EnrollmentService', () => {
         meta: { count: 4 },
       });
       expect(mockPrisma.payment.count).toHaveBeenCalledWith({
-        where: { programId: 'fund', personId: 'p1' },
+        where: { programId: 'fund', contributorId: 'p1' },
       });
       expect(mockPrisma.programEnrollment.delete).not.toHaveBeenCalled();
     });

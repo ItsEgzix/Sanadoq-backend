@@ -1,8 +1,8 @@
 /**
- * How the duplicate scan decides two Person records *might* be one human.
+ * How the duplicate scan decides two Contributor records *might* be one human.
  * These rules only ever propose: a pair they match becomes an OPEN
- * PersonDuplicateFlag for a person to confirm or dismiss. Nothing here, or
- * anywhere else, merges on a match — the workbook has real near-duplicates
+ * ContributorDuplicateFlag for a reviewer to confirm or dismiss. Nothing here,
+ * or anywhere else, merges on a match — the workbook has real near-duplicates
  * (same person, different account numbers in different sheets) and real
  * namesakes, and only someone who knows the fund can tell which is which.
  *
@@ -24,15 +24,15 @@ export type DuplicateReason =
   // three digits) under a different join date.
   | 'SAME_SERIAL';
 
-export interface PersonKey {
+export interface ContributorKey {
   id: string;
   name: string;
   accountNumber: string;
 }
 
 export interface DuplicatePair {
-  personAId: string;
-  personBId: string;
+  contributorAId: string;
+  contributorBId: string;
   reasons: DuplicateReason[];
 }
 
@@ -88,8 +88,8 @@ export function accountSerial(accountNumber: string): string {
 
 /** Why two records look like one human; empty when they do not. */
 export function duplicateReasons(
-  a: PersonKey,
-  b: PersonKey,
+  a: ContributorKey,
+  b: ContributorKey,
 ): DuplicateReason[] {
   return reasonsFor(
     { ...a, tokens: nameTokens(a.name) },
@@ -97,32 +97,32 @@ export function duplicateReasons(
   );
 }
 
-/** a and b in the fixed order CHECK "PersonDuplicateFlag_ordered_pair" wants. */
+/** a and b in the fixed order CHECK "ContributorDuplicateFlag_ordered_pair" wants. */
 export function orderedPair(
   firstId: string,
   secondId: string,
-): { personAId: string; personBId: string } {
+): { contributorAId: string; contributorBId: string } {
   return firstId < secondId
-    ? { personAId: firstId, personBId: secondId }
-    : { personAId: secondId, personBId: firstId };
+    ? { contributorAId: firstId, contributorBId: secondId }
+    : { contributorAId: secondId, contributorBId: firstId };
 }
 
 /**
- * Every candidate pair among `people`. Every rule needs the first two tokens
- * to agree (a shorter name of three or more tokens that prefixes a longer one
- * shares its first two), so people are bucketed on those and compared only
- * within a bucket — near-linear for a fund's few hundred names.
+ * Every candidate pair among `contributors`. Every rule needs the first two
+ * tokens to agree (a shorter name of three or more tokens that prefixes a
+ * longer one shares its first two), so contributors are bucketed on those and
+ * compared only within a bucket — near-linear for a fund's few hundred names.
  */
 export function findDuplicatePairs(
-  people: readonly PersonKey[],
+  contributors: readonly ContributorKey[],
 ): DuplicatePair[] {
-  const buckets = new Map<string, TokenizedPerson[]>();
-  for (const person of people) {
-    const tokens = nameTokens(person.name);
+  const buckets = new Map<string, TokenizedContributor[]>();
+  for (const contributor of contributors) {
+    const tokens = nameTokens(contributor.name);
     if (tokens.length === 0) continue;
     const key = tokens.slice(0, 2).join(' ');
     const bucket = buckets.get(key);
-    const entry = { ...person, tokens };
+    const entry = { ...contributor, tokens };
     if (bucket) bucket.push(entry);
     else buckets.set(key, [entry]);
   }
@@ -144,9 +144,12 @@ export function findDuplicatePairs(
   return pairs;
 }
 
-type TokenizedPerson = PersonKey & { tokens: string[] };
+type TokenizedContributor = ContributorKey & { tokens: string[] };
 
-function reasonsFor(a: TokenizedPerson, b: TokenizedPerson): DuplicateReason[] {
+function reasonsFor(
+  a: TokenizedContributor,
+  b: TokenizedContributor,
+): DuplicateReason[] {
   if (a.id === b.id || a.tokens.length === 0 || b.tokens.length === 0) {
     return [];
   }

@@ -1,6 +1,6 @@
 /**
  * Copies Eradat data from the old Member-shaped schema (the first baseline:
- * Cycle, Member, ProjectAccount, MonthlyPayment) into the Person / Program
+ * Cycle, Member, ProjectAccount, MonthlyPayment) into the Contributor / Program
  * shape. Only for a database that still holds rows in that old shape — the
  * local `npx prisma dev` server's synthetic demo data, for one.
  *
@@ -12,16 +12,17 @@
  * program baseline.
  *
  * Identity is never decided here. Every old member becomes exactly one
- * Person — nothing is merged, however alike two names look. Look-alikes are
- * raised as duplicate flags for a person to confirm or dismiss in the app.
- * The workbook has real near-duplicates (same person, different account
+ * Contributor — nothing is merged, however alike two names look. Look-alikes
+ * are raised as duplicate flags for a reviewer to confirm or dismiss in the
+ * app. The workbook has real near-duplicates (same person, different account
  * numbers in different sheets) and real namesakes; telling them apart is a
  * human call.
  *
  * Mapping:
- *   Member          → Person (account number YYMMNNN from its parts) + a fund
- *                     enrollment carrying its rate, previous subscription and
- *                     status. Soft-deleted members are skipped.
+ *   Member          → Contributor (account number YYMMNNN from its parts) +
+ *                     a fund enrollment carrying its rate, previous
+ *                     subscription and status. Soft-deleted members are
+ *                     skipped.
  *   member cells    → monthly cells of the fund program, ★ kept as ★.
  *   ProjectAccount  → a Program running without cycles (a dated ledger).
  *   project cells   → one dated entry per filled month, on the 1st, from the
@@ -36,10 +37,10 @@
 import 'dotenv/config';
 import { Client } from 'pg';
 import type { Prisma } from 'generated/prisma/client';
-import { findDuplicatePairs } from 'src/people/person-duplicate.util';
+import { findDuplicatePairs } from 'src/contributors/contributor-duplicate.util';
 import {
   describeDatabase,
-  matchPeopleByAccount,
+  matchContributorsByAccount,
   openDatabase,
 } from './script.util';
 
@@ -142,11 +143,11 @@ async function main() {
         'The target has no protected fund program — run the migrations first.',
       );
 
-    // ── Members → People ──
+    // ── Members → Contributors ──
     const tooLong = legacy.members.filter((m) => m.serial > MAX_SERIAL);
     const members = legacy.members.filter((m) => m.serial <= MAX_SERIAL);
     console.log(
-      `Members: ${legacy.members.length} live → ${members.length} people` +
+      `Members: ${legacy.members.length} live → ${members.length} contributors` +
         (tooLong.length
           ? `, ${tooLong.length} skipped (serial over ${MAX_SERIAL}: ${tooLong.map((m) => m.name).join(', ')})`
           : '') +
@@ -159,19 +160,19 @@ async function main() {
       name: m.name,
       accountNumber: accountNumberOf(m),
     }));
-    const before = await matchPeopleByAccount(prisma, planned);
+    const before = await matchContributorsByAccount(prisma, planned);
     if (APPLY && before.missing.length > 0) {
-      const { count } = await prisma.person.createMany({
+      const { count } = await prisma.contributor.createMany({
         data: before.missing.map(({ name, accountNumber }) => ({
           name,
           accountNumber,
         })),
         skipDuplicates: true,
       });
-      console.log(`  inserted ${count} people`);
+      console.log(`  inserted ${count} contributors`);
     }
-    const { ids: personOfMember, conflicts } = APPLY
-      ? await matchPeopleByAccount(prisma, planned)
+    const { ids: contributorOfMember, conflicts } = APPLY
+      ? await matchContributorsByAccount(prisma, planned)
       : {
           ...before,
           // Nothing exists yet in a dry run; a placeholder keeps counts honest.
@@ -180,20 +181,20 @@ async function main() {
             ...before.missing.map((p) => [p.key, `planned:${p.key}`] as const),
           ]),
         };
-    for (const { planned: person, existingName } of conflicts) {
+    for (const { planned: contributor, existingName } of conflicts) {
       console.log(
-        `  CONFLICT ${person.accountNumber}: "${person.name}" — that number already belongs to "${existingName}". Skipped with its payments; resolve by hand.`,
+        `  CONFLICT ${contributor.accountNumber}: "${contributor.name}" — that number already belongs to "${existingName}". Skipped with its payments; resolve by hand.`,
       );
     }
 
     // ── Fund enrollments ──
     const enrollments: Prisma.ProgramEnrollmentCreateManyInput[] =
       members.flatMap((m) => {
-        const personId = personOfMember.get(m.id);
-        return personId
+        const contributorId = contributorOfMember.get(m.id);
+        return contributorId
           ? [
               {
-                personId,
+                contributorId,
                 programId: fund.id,
                 expectedRate: m.expectedAnnualRate,
                 previousSubscription: m.previousSubscription,
@@ -240,7 +241,7 @@ async function main() {
       });
       if (existing && existing.type === 'PERIODIC' && existing.hasCycles) {
         // A monthly-grid program of that name already exists; its cells need a
-        // payer, which the old totals do not have. A person must decide.
+        // payer, which the old totals do not have. A reviewer must decide.
         console.log(
           `Program ${project.name}: exists as a monthly grid — its old totals are NOT copied`,
         );
@@ -263,11 +264,11 @@ async function main() {
     let skippedStars = 0;
     for (const cell of legacy.cells) {
       if (cell.memberId) {
-        const personId = personOfMember.get(cell.memberId);
-        if (!personId) continue; // a deleted or skipped member's cell
+        const contributorId = contributorOfMember.get(cell.memberId);
+        if (!contributorId) continue; // a deleted or skipped member's cell
         payments.push({
           programId: fund.id,
-          personId,
+          contributorId,
           year: cell.year,
           month: cell.month,
           isStarred: cell.type === 'STARRED',
@@ -326,35 +327,36 @@ async function main() {
     }
 
     // ── Duplicate review — flags only, never a merge ──
-    // Everyone already in the target plus — in a dry run — the people this
-    // run would add, so the preview lists the same pairs --apply would raise.
-    const existingPeople = await prisma.person.findMany({
+    // Everyone already in the target plus — in a dry run — the contributors
+    // this run would add, so the preview lists the same pairs --apply would
+    // raise.
+    const existingContributors = await prisma.contributor.findMany({
       where: { isDeleted: false },
       select: { id: true, name: true, accountNumber: true },
     });
-    const people = APPLY
-      ? existingPeople
+    const contributors = APPLY
+      ? existingContributors
       : [
-          ...existingPeople,
+          ...existingContributors,
           ...before.missing.map((p) => ({
             id: `planned:${p.key}`,
             name: p.name,
             accountNumber: p.accountNumber,
           })),
         ];
-    const pairs = findDuplicatePairs(people);
+    const pairs = findDuplicatePairs(contributors);
     console.log(
       `Possible duplicates: ${pairs.length} pairs, raised for review in the app — none merged`,
     );
     for (const pair of pairs) {
-      const a = people.find((p) => p.id === pair.personAId);
-      const b = people.find((p) => p.id === pair.personBId);
+      const a = contributors.find((p) => p.id === pair.contributorAId);
+      const b = contributors.find((p) => p.id === pair.contributorBId);
       console.log(
         `  ${a?.accountNumber} ${a?.name}  ~  ${b?.accountNumber} ${b?.name}  [${pair.reasons.join(', ')}]`,
       );
     }
     if (APPLY && pairs.length > 0) {
-      const { count } = await prisma.personDuplicateFlag.createMany({
+      const { count } = await prisma.contributorDuplicateFlag.createMany({
         data: pairs,
         skipDuplicates: true,
       });

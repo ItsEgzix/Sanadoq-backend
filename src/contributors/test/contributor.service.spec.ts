@@ -1,22 +1,22 @@
 import { Prisma } from 'generated/prisma/client';
 import type { PrismaService } from 'src/prisma/prisma.service';
-import type { PersonDuplicateService } from '../person-duplicate.service';
-import { PersonService } from '../person.service';
+import type { ContributorDuplicateService } from '../contributor-duplicate.service';
+import { ContributorService } from '../contributor.service';
 
 const mockPrisma = {
   $transaction: jest.fn(),
-  person: {
+  contributor: {
     findFirst: jest.fn(),
     findMany: jest.fn(),
     create: jest.fn(),
     update: jest.fn(),
   },
   programEnrollment: { findMany: jest.fn() },
-  personDuplicateFlag: { deleteMany: jest.fn() },
+  contributorDuplicateFlag: { deleteMany: jest.fn() },
 };
 const mockDuplicates = { flagPossibleDuplicates: jest.fn() };
 
-const PERSON = {
+const CONTRIBUTOR = {
   id: 'p1',
   name: 'عمر محمد ملهي',
   accountNumber: '2402006',
@@ -24,40 +24,42 @@ const PERSON = {
   email: null,
 };
 
-describe('PersonService', () => {
-  let service: PersonService;
+describe('ContributorService', () => {
+  let service: ContributorService;
 
   beforeEach(() => {
     jest.resetAllMocks();
     mockDuplicates.flagPossibleDuplicates.mockResolvedValue(0);
-    mockPrisma.person.findFirst.mockResolvedValue({
-      ...PERSON,
+    mockPrisma.contributor.findFirst.mockResolvedValue({
+      ...CONTRIBUTOR,
       enrollments: [],
     });
-    service = new PersonService(
+    service = new ContributorService(
       mockPrisma as unknown as PrismaService,
-      mockDuplicates as unknown as PersonDuplicateService,
+      mockDuplicates as unknown as ContributorDuplicateService,
     );
   });
 
-  it('checks a new person against everyone else and reports how many flags it raised', async () => {
-    mockPrisma.person.create.mockResolvedValue(PERSON);
+  it('checks a new contributor against everyone else and reports how many flags it raised', async () => {
+    mockPrisma.contributor.create.mockResolvedValue(CONTRIBUTOR);
     mockDuplicates.flagPossibleDuplicates.mockResolvedValue(2);
 
-    const result = await service.createPerson({
-      name: PERSON.name,
-      accountNumber: PERSON.accountNumber,
+    const result = await service.createContributor({
+      name: CONTRIBUTOR.name,
+      accountNumber: CONTRIBUTOR.accountNumber,
     });
 
-    expect(mockDuplicates.flagPossibleDuplicates).toHaveBeenCalledWith(PERSON);
+    expect(mockDuplicates.flagPossibleDuplicates).toHaveBeenCalledWith(
+      CONTRIBUTOR,
+    );
     expect(result).toMatchObject({
       possibleDuplicates: 2,
-      successCode: 'PERSON_CREATE_SUCCESS',
+      successCode: 'CONTRIBUTOR_CREATE_SUCCESS',
     });
   });
 
-  it('turns an account-number clash into PERSON_ACCOUNT_NUMBER_TAKEN', async () => {
-    mockPrisma.person.create.mockRejectedValue(
+  it('turns an account-number clash into CONTRIBUTOR_ACCOUNT_NUMBER_TAKEN', async () => {
+    mockPrisma.contributor.create.mockRejectedValue(
       new Prisma.PrismaClientKnownRequestError('dup', {
         code: 'P2002',
         clientVersion: '7.10.0',
@@ -65,18 +67,21 @@ describe('PersonService', () => {
     );
 
     await expect(
-      service.createPerson({ name: 'x', accountNumber: '0203002' }),
+      service.createContributor({ name: 'x', accountNumber: '0203002' }),
     ).rejects.toMatchObject({
-      errorCode: 'PERSON_ACCOUNT_NUMBER_TAKEN',
+      errorCode: 'CONTRIBUTOR_ACCOUNT_NUMBER_TAKEN',
       meta: { accountNumber: '0203002' },
     });
     expect(mockDuplicates.flagPossibleDuplicates).not.toHaveBeenCalled();
   });
 
   it('re-checks for duplicates only when the name or number actually changed', async () => {
-    mockPrisma.person.update.mockResolvedValue({ ...PERSON, phone: '123' });
+    mockPrisma.contributor.update.mockResolvedValue({
+      ...CONTRIBUTOR,
+      phone: '123',
+    });
 
-    await service.updatePerson('p1', { phone: '123' });
+    await service.updateContributor('p1', { phone: '123' });
 
     expect(mockDuplicates.flagPossibleDuplicates).not.toHaveBeenCalled();
   });
@@ -86,8 +91,8 @@ describe('PersonService', () => {
       { program: { id: 'fund', name: 'اشتراكات الصندوق' } },
     ]);
 
-    await expect(service.deletePerson('p1')).rejects.toMatchObject({
-      errorCode: 'PERSON_HAS_ENROLLMENTS',
+    await expect(service.deleteContributor('p1')).rejects.toMatchObject({
+      errorCode: 'CONTRIBUTOR_HAS_ENROLLMENTS',
       meta: {
         details: {
           blockers: [{ kind: 'PROGRAM', id: 'fund', name: 'اشتراكات الصندوق' }],
@@ -98,11 +103,11 @@ describe('PersonService', () => {
   });
 
   it('matches a typed account-number prefix as well as a name fragment', async () => {
-    mockPrisma.person.findMany.mockResolvedValue([]);
+    mockPrisma.contributor.findMany.mockResolvedValue([]);
 
-    await service.listPeople({ limit: 20, q: '0203' });
+    await service.listContributors({ limit: 20, q: '0203' });
 
-    const { where } = mockPrisma.person.findMany.mock.calls[0][0];
+    const { where } = mockPrisma.contributor.findMany.mock.calls[0][0];
     expect(where.OR).toContainEqual({ accountNumber: { startsWith: '0203' } });
     expect(where.OR).toContainEqual({
       name: { contains: '0203', mode: 'insensitive' },

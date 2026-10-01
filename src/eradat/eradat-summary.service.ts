@@ -18,7 +18,7 @@ import { collectionRatio, runningTotal } from './revenue.util';
 // separately as an outflow and never subtracted, since there is no Expenses
 // module to book it against yet (see the TODO on Payment.payerProgramId).
 const PAYER_KINDS = {
-  enrolled: { personId: { not: null } },
+  enrolled: { contributorId: { not: null } },
   programs: { payerProgramId: { not: null } },
   oneOff: { payerNameFreetext: { not: null } },
 } satisfies Record<string, Prisma.PaymentWhereInput>;
@@ -27,7 +27,7 @@ type PayerKind = keyof typeof PAYER_KINDS;
 type KindTotals = Record<PayerKind, Prisma.Decimal>;
 
 interface MonthTotals extends KindTotals {
-  // Unstarred payments by enrolled people that month, and stars.
+  // Unstarred payments by enrolled contributors that month, and stars.
   paidCount: number;
   starredCount: number;
 }

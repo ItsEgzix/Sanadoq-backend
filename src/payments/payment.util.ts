@@ -25,11 +25,11 @@ export function payerColumns(
   payer: PaymentPayer,
 ): Pick<
   Prisma.PaymentUncheckedCreateInput,
-  'personId' | 'payerProgramId' | 'payerNameFreetext'
+  'contributorId' | 'payerProgramId' | 'payerNameFreetext'
 > {
   switch (payer.kind) {
-    case 'PERSON':
-      return { personId: payer.personId };
+    case 'CONTRIBUTOR':
+      return { contributorId: payer.contributorId };
     case 'PROGRAM':
       return { payerProgramId: payer.programId };
     case 'FREETEXT':
@@ -44,11 +44,11 @@ export function cellUniqueKey(
   year: number,
   month: number,
 ): Prisma.PaymentWhereUniqueInput {
-  return payer.kind === 'PERSON'
+  return payer.kind === 'CONTRIBUTOR'
     ? {
-        programId_personId_year_month: {
+        programId_contributorId_year_month: {
           programId,
-          personId: payer.personId,
+          contributorId: payer.contributorId,
           year,
           month,
         },
@@ -81,12 +81,12 @@ export function toPaymentEntryView(entry: PaymentEntryRow) {
 export type PaymentEntryView = ReturnType<typeof toPaymentEntryView>;
 
 function describePayer(entry: PaymentEntryRow) {
-  if (entry.personId && entry.person) {
+  if (entry.contributorId && entry.contributor) {
     return {
-      kind: 'PERSON' as const,
-      personId: entry.personId,
-      name: entry.person.name,
-      accountNumber: entry.person.accountNumber,
+      kind: 'CONTRIBUTOR' as const,
+      contributorId: entry.contributorId,
+      name: entry.contributor.name,
+      accountNumber: entry.contributor.accountNumber,
     };
   }
   if (entry.payerProgramId && entry.payerProgram) {

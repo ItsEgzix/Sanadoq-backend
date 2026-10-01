@@ -131,7 +131,7 @@ describe('revenue.util', () => {
       });
     });
 
-    it('treats a person with no payments at all as zero', () => {
+    it('treats a contributor with no payments at all as zero', () => {
       expect(buildLedgerLine(undefined, [2026], 2026, d(0)).runningTotal).toBe(
         '0.00',
       );

@@ -18,10 +18,10 @@ export const PAYMENT_ENTRY_SELECT = {
   paymentDate: true,
   amount: true,
   createdAt: true,
-  personId: true,
+  contributorId: true,
   payerNameFreetext: true,
   payerProgramId: true,
-  person: { select: { name: true, accountNumber: true } },
+  contributor: { select: { name: true, accountNumber: true } },
   // Relation reads are not soft-delete filtered, so a payment from a program
   // deleted since still names it.
   payerProgram: { select: { name: true } },

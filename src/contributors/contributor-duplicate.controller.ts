@@ -16,16 +16,16 @@ import {
 } from 'src/common/decorators/current-user.decorator';
 import { ListDuplicatesQueryDto } from './dto/list-duplicates-query.dto';
 import { MergeDuplicateDto } from './dto/merge-duplicate.dto';
-import { PersonDuplicateService } from './person-duplicate.service';
+import { ContributorDuplicateService } from './contributor-duplicate.service';
 
 /**
  * The duplicate review queue. Merge and dismiss are the only ways a flag is
- * resolved, and both are a person's explicit decision.
+ * resolved, and both are a reviewer's explicit decision.
  */
 @RequirePermission(PERMISSIONS.MANAGE_FUND)
-@Controller('people/duplicates')
-export class PersonDuplicateController {
-  constructor(private readonly duplicateService: PersonDuplicateService) {}
+@Controller('contributors/duplicates')
+export class ContributorDuplicateController {
+  constructor(private readonly duplicateService: ContributorDuplicateService) {}
 
   @Get()
   async list(@Query() query: ListDuplicatesQueryDto) {

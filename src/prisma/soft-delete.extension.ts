@@ -6,7 +6,7 @@ import { Prisma } from 'generated/prisma/client';
  * list and total.
  */
 export const SOFT_DELETE_MODELS: ReadonlySet<Prisma.ModelName> =
-  new Set<Prisma.ModelName>(['Person', 'Program']);
+  new Set<Prisma.ModelName>(['Contributor', 'Program']);
 
 // findUnique is absent on purpose: its `where` only accepts unique fields, so
 // `isDeleted` cannot be injected. Use findFirst for anything that must skip
