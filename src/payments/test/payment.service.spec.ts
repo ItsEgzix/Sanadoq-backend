@@ -1,0 +1,386 @@
+import { HttpStatus } from '@nestjs/common';
+import { Prisma } from 'generated/prisma/client';
+import { AppException } from 'src/common/exceptions/app.exception';
+import { CycleService } from 'src/cycles/cycle.service';
+import type { EnrollmentService } from 'src/enrollments/enrollment.service';
+import type { ProgramService } from 'src/programs/program.service';
+import type { PrismaService } from 'src/prisma/prisma.service';
+import { PaymentService } from '../payment.service';
+
+const CYCLE = {
+  id: 'c1',
+  programId: 'fund',
+  startYear: 2026,
+  lengthYears: 4,
+  endYear: 2029,
+  isCurrent: true,
+};
+const MONTHLY_PROGRAM = {
+  id: 'fund',
+  name: 'اشتراكات الصندوق',
+  type: 'PERIODIC',
+  hasCycles: true,
+  isProtected: true,
+  sortOrder: 0,
+  cycles: [CYCLE],
+};
+const DATED_PROGRAM = {
+  id: 'camp',
+  name: 'حملة',
+  type: 'TEMPORARY',
+  hasCycles: false,
+  isProtected: false,
+  sortOrder: 1,
+  cycles: [],
+};
+
+const mockPrisma = {
+  payment: {
+    upsert: jest.fn(),
+    deleteMany: jest.fn(),
+    create: jest.fn(),
+    findFirst: jest.fn(),
+    findUnique: jest.fn(),
+  },
+  program: { findFirst: jest.fn() },
+};
+const mockProgramService = { assertProgramExists: jest.fn() };
+const mockEnrollmentService = { assertEnrolled: jest.fn() };
+
+const PERSON = { kind: 'PERSON' as const, personId: 'p1' };
+const FROM_FUND = { kind: 'PROGRAM' as const, programId: 'fund' };
+
+const entryRow = (overrides: Record<string, unknown> = {}) => ({
+  id: 'pay-1',
+  year: 2026,
+  paymentDate: new Date('2026-03-01T00:00:00.000Z'),
+  amount: new Prisma.Decimal(250),
+  createdAt: new Date(),
+  personId: null,
+  payerNameFreetext: 'متبرع',
+  payerProgramId: null,
+  person: null,
+  payerProgram: null,
+  recordedBy: { name: 'Treasurer' },
+  ...overrides,
+});
+
+describe('PaymentService', () => {
+  let service: PaymentService;
+
+  beforeEach(() => {
+    jest.resetAllMocks();
+    mockProgramService.assertProgramExists.mockImplementation((id: string) =>
+      Promise.resolve(id === 'camp' ? DATED_PROGRAM : MONTHLY_PROGRAM),
+    );
+    mockEnrollmentService.assertEnrolled.mockResolvedValue({ id: 'e1' });
+    mockPrisma.program.findFirst.mockResolvedValue({ id: 'fund' });
+    // The real CycleService, so the window and year fence under test are the shipped ones.
+    const cycleService = new CycleService(
+      mockPrisma as unknown as PrismaService,
+      mockProgramService as unknown as ProgramService,
+    );
+    service = new PaymentService(
+      mockPrisma as unknown as PrismaService,
+      cycleService,
+      mockEnrollmentService as unknown as EnrollmentService,
+    );
+  });
+
+  describe('setCell', () => {
+    it('upserts an enrolled person’s cell on its unique key and records who wrote it', async () => {
+      mockPrisma.payment.upsert.mockResolvedValue({
+        year: 2026,
+        month: 3,
+        isStarred: false,
+        amount: new Prisma.Decimal('300.5'),
+      });
+
+      const result = await service.setCell(
+        'u1',
+        'fund',
+        PERSON,
+        { year: 2026, month: 3 },
+        { isStarred: false, amount: '300.5' },
+      );
+
+      expect(mockPrisma.payment.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            programId_personId_year_month: {
+              programId: 'fund',
+              personId: 'p1',
+              year: 2026,
+              month: 3,
+            },
+          },
+          create: {
+            programId: 'fund',
+            personId: 'p1',
+            year: 2026,
+            month: 3,
+            isStarred: false,
+            amount: '300.5',
+            recordedById: 'u1',
+          },
+        }),
+      );
+      expect(result).toMatchObject({
+        amount: '300.50',
+        successCode: 'PAYMENT_CELL_SAVE_SUCCESS',
+      });
+    });
+
+    it('stores a star with a NULL amount, which is what keeps it out of every sum', async () => {
+      mockPrisma.payment.upsert.mockResolvedValue({
+        year: 2026,
+        month: 1,
+        isStarred: true,
+        amount: null,
+      });
+
+      const result = await service.setCell(
+        'u1',
+        'fund',
+        PERSON,
+        { year: 2026, month: 1 },
+        { isStarred: true },
+      );
+
+      expect(mockPrisma.payment.upsert.mock.calls[0][0].update).toEqual({
+        isStarred: true,
+        amount: null,
+        recordedById: 'u1',
+      });
+      expect(result.amount).toBeNull();
+    });
+
+    it('writes another program’s row on the program-payer key, never the person one', async () => {
+      mockPrisma.payment.upsert.mockResolvedValue({
+        year: 2026,
+        month: 1,
+        isStarred: false,
+        amount: new Prisma.Decimal(9000),
+      });
+
+      await service.setCell(
+        'u1',
+        'mwa',
+        FROM_FUND,
+        { year: 2026, month: 1 },
+        { isStarred: false, amount: '9000' },
+      );
+
+      const call = mockPrisma.payment.upsert.mock.calls[0][0];
+      expect(call.where).toEqual({
+        programId_payerProgramId_year_month: {
+          programId: 'mwa',
+          payerProgramId: 'fund',
+          year: 2026,
+          month: 1,
+        },
+      });
+      expect(call.create).not.toHaveProperty('personId');
+      expect(mockEnrollmentService.assertEnrolled).not.toHaveBeenCalled();
+    });
+
+    it('refuses a program paying itself', async () => {
+      await expect(
+        service.setCell(
+          'u1',
+          'fund',
+          FROM_FUND,
+          { year: 2026, month: 1 },
+          { isStarred: false, amount: '1' },
+        ),
+      ).rejects.toMatchObject({ errorCode: 'PAYMENT_SELF_TRANSFER' });
+      expect(mockPrisma.payment.upsert).not.toHaveBeenCalled();
+    });
+
+    it('refuses a payer program that does not exist or was deleted', async () => {
+      mockPrisma.program.findFirst.mockResolvedValue(null);
+      await expect(
+        service.setCell(
+          'u1',
+          'mwa',
+          FROM_FUND,
+          { year: 2026, month: 1 },
+          { isStarred: false, amount: '1' },
+        ),
+      ).rejects.toMatchObject({ errorCode: 'PAYMENT_PAYER_PROGRAM_NOT_FOUND' });
+    });
+
+    it('refuses a person not enrolled in the program before writing anything', async () => {
+      mockEnrollmentService.assertEnrolled.mockRejectedValue(
+        new AppException('ENROLLMENT_NOT_FOUND', {}, HttpStatus.NOT_FOUND),
+      );
+      await expect(
+        service.setCell(
+          'u1',
+          'fund',
+          PERSON,
+          { year: 2026, month: 3 },
+          { isStarred: false, amount: '1' },
+        ),
+      ).rejects.toMatchObject({ errorCode: 'ENROLLMENT_NOT_FOUND' });
+      expect(mockPrisma.payment.upsert).not.toHaveBeenCalled();
+    });
+
+    it('rejects a year outside the program’s current cycle — the fence around unconfirmed advance payments', async () => {
+      await expect(
+        service.setCell(
+          'u1',
+          'fund',
+          PERSON,
+          { year: 2030, month: 1 },
+          { isStarred: false, amount: '1' },
+        ),
+      ).rejects.toMatchObject({ errorCode: 'CYCLE_YEAR_OUT_OF_RANGE' });
+      expect(mockPrisma.payment.upsert).not.toHaveBeenCalled();
+    });
+
+    it('refuses a monthly cell on a program that keeps a dated ledger', async () => {
+      await expect(
+        service.setCell(
+          'u1',
+          'camp',
+          FROM_FUND,
+          { year: 2026, month: 1 },
+          { isStarred: false, amount: '1' },
+        ),
+      ).rejects.toMatchObject({ errorCode: 'PROGRAM_NOT_MONTHLY' });
+    });
+  });
+
+  describe('clearCell', () => {
+    it('deletes by program, payer and month, and succeeds on an already-empty cell', async () => {
+      mockPrisma.payment.deleteMany.mockResolvedValue({ count: 0 });
+
+      const result = await service.clearCell('fund', PERSON, {
+        year: 2026,
+        month: 3,
+      });
+
+      expect(mockPrisma.payment.deleteMany).toHaveBeenCalledWith({
+        where: { programId: 'fund', personId: 'p1', year: 2026, month: 3 },
+      });
+      expect(result.successCode).toBe('PAYMENT_CELL_CLEAR_SUCCESS');
+    });
+  });
+
+  describe('recordPayment', () => {
+    it('books a stranger’s gift as a dated entry, filing it under the date’s year', async () => {
+      mockPrisma.payment.create.mockResolvedValue(entryRow());
+
+      const result = await service.recordPayment('u1', 'camp', {
+        payer: { kind: 'FREETEXT', name: 'متبرع' },
+        amount: '250',
+        paymentDate: new Date('2026-03-01T00:00:00.000Z'),
+      });
+
+      expect(mockPrisma.payment.create.mock.calls[0][0].data).toEqual({
+        programId: 'camp',
+        payerNameFreetext: 'متبرع',
+        amount: '250',
+        year: 2026,
+        paymentDate: new Date('2026-03-01T00:00:00.000Z'),
+        idempotencyKey: undefined,
+        recordedById: 'u1',
+      });
+      expect(result).toMatchObject({
+        paymentDate: '2026-03-01',
+        payer: { kind: 'FREETEXT', name: 'متبرع' },
+        successCode: 'PAYMENT_RECORD_SUCCESS',
+      });
+    });
+
+    it('answers a double submit with the payment the first one booked', async () => {
+      mockPrisma.payment.create.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('dup', {
+          code: 'P2002',
+          clientVersion: '7.10.0',
+        }),
+      );
+      mockPrisma.payment.findUnique.mockResolvedValue({
+        ...entryRow(),
+        programId: 'camp',
+      });
+
+      const result = await service.recordPayment('u1', 'camp', {
+        payer: { kind: 'FREETEXT', name: 'متبرع' },
+        amount: '250',
+        paymentDate: new Date('2026-03-01T00:00:00.000Z'),
+        idempotencyKey: '7f9c0c35-3f43-4b2a-9d5e-0a3bdb2b6f10',
+      });
+
+      expect(result).toMatchObject({ id: 'pay-1' });
+      expect(mockPrisma.payment.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses an idempotency key that already booked a payment in another program', async () => {
+      mockPrisma.payment.create.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('dup', {
+          code: 'P2002',
+          clientVersion: '7.10.0',
+        }),
+      );
+      mockPrisma.payment.findUnique.mockResolvedValue({
+        ...entryRow(),
+        programId: 'elsewhere',
+      });
+
+      await expect(
+        service.recordPayment('u1', 'camp', {
+          payer: { kind: 'FREETEXT', name: 'x' },
+          amount: '1',
+          paymentDate: new Date('2026-03-01T00:00:00.000Z'),
+          idempotencyKey: '7f9c0c35-3f43-4b2a-9d5e-0a3bdb2b6f10',
+        }),
+      ).rejects.toMatchObject({ errorCode: 'PAYMENT_IDEMPOTENCY_KEY_REUSED' });
+    });
+
+    it('refuses a dated entry on a program that keeps a monthly grid', async () => {
+      await expect(
+        service.recordPayment('u1', 'fund', {
+          payer: { kind: 'FREETEXT', name: 'x' },
+          amount: '1',
+          paymentDate: new Date('2026-03-01T00:00:00.000Z'),
+        }),
+      ).rejects.toMatchObject({ errorCode: 'PROGRAM_NOT_DATED' });
+      expect(mockPrisma.payment.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('deletePayment', () => {
+    it('only removes dated entries — cells are cleared through their cell URL', async () => {
+      mockPrisma.payment.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.deletePayment('camp', 'cell-id'),
+      ).rejects.toMatchObject({ errorCode: 'PAYMENT_NOT_FOUND' });
+      expect(mockPrisma.payment.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'cell-id', programId: 'camp', month: null },
+        }),
+      );
+      expect(mockPrisma.payment.deleteMany).not.toHaveBeenCalled();
+    });
+  });
+
+  it('keeps advance payments pending at 501', () => {
+    let thrown: unknown;
+    try {
+      service.recordAdvancePayment(
+        'fund',
+        PERSON,
+        { year: 2026, month: 1 },
+        2027,
+        '1200',
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toMatchObject({ errorCode: 'FEATURE_PENDING_CONFIRMATION' });
+    expect((thrown as AppException).getStatus()).toBe(501);
+  });
+});

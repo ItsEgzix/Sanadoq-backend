@@ -1,7 +1,42 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
+// ═══════════════════════════════════════════════════════════════════════════
+// Sanadoq — Eradat (الإيرادات) revenue books
+//
+// Layout
+//   1. Access        Role (named permission bundles) and User
+//   2. People        Person — one row per human, system-wide — and the
+//                    PersonDuplicateFlag review queue
+//   3. Programs      Program — every revenue stream (the fund's membership,
+//                    مواساة, جامع السعيد, each campaign) is a row here — and
+//                    its own Cycle rows when it has cycles
+//   4. Enrollment    ProgramEnrollment — a Person's participation in one
+//                    Program, carrying that program's pledge for them
+//   5. Payments      Payment — money a Program received
+//
+// Rules that span models
+//   - A Payment has exactly one payer: a Person, a free-text name, or another
+//     Program (CHECK "Payment_exactly_one_payer"). A Person payer must be
+//     enrolled in the receiving program — the composite FK
+//     (personId, programId) → ProgramEnrollment makes that a database fact.
+//   - A Payment is either a monthly cell (year + month) or a dated entry
+//     (paymentDate, year derived from it). Programs that are PERIODIC with
+//     cycles keep the monthly grid; every other program keeps a dated ledger.
+//     See programEntryMode() in src/programs/program.util.ts.
+//   - Only unstarred payments carry money. A starred cell (★, "paid but booked
+//     under another month") has amount NULL by constraint, so every
+//     SUM(amount) skips it without remembering the rule.
+//   - A Program → Program payment (payerProgramId) is revenue for the receiving
+//     program only. It is never summed into the payer's revenue: every total
+//     filters on programId, never on payerProgramId.
+//   - Exactly one Program is protected — the fund's membership program, made
+//     by the baseline migration. Its type and hasCycles are frozen and it can
+//     never be deleted: ProgramService enforces this, and the trigger
+//     "Program_guard_protected" backs it up against raw SQL.
+//   - Money is Decimal(14, 2) in the fund's single booking currency. Which
+//     currency is not yet confirmed, so no column carries a currency suffix.
+//   - CHECKs, partial unique indexes, the cycle overlap exclusion, the
+//     composite enrollment FK's ON UPDATE CASCADE and the protection trigger
+//     exist only in migration SQL. Each is named next to what it guards.
+// ═══════════════════════════════════════════════════════════════════════════
 
 generator client {
   provider = "prisma-client"
@@ -12,3 +47,291 @@ datasource db {
   provider = "postgresql"
 }
 
+// ── Access ─────────────────────────────────────────────────────────────────
+
+/// A named bundle of permissions. AuthGuard checks a permission string, never
+/// a role or a user id, so a second role (say, a collector who may only record
+/// payments) is an INSERT here, not a code change. The baseline migration
+/// creates FUND_MANAGER with MANAGE_FUND, the only permission today.
+model Role {
+  key         String   @id // stable identifier, e.g. FUND_MANAGER
+  name        String
+  // Permission strings AuthGuard compares against @RequirePermission(). An
+  // unknown string grants nothing, so a typo fails closed.
+  permissions String[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users User[]
+}
+
+/// Someone who can sign in. Accounts are deactivated, never deleted: payments
+/// and review decisions keep pointing at who recorded them.
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique // stored lowercased — CHECK "User_email_lowercase"
+  name         String
+  passwordHash String // Argon2id, see src/auth/password.util.ts
+  // Restrict: a role still assigned to someone cannot disappear from under them.
+  roleKey      String    @default("FUND_MANAGER")
+  isActive     Boolean   @default(true)
+  // Embedded in every token; bumping it (logout, password change,
+  // deactivation) invalidates every session the user holds at once.
+  tokenVersion Int       @default(0)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  role                   Role                  @relation(fields: [roleKey], references: [key], onUpdate: Cascade, onDelete: Restrict)
+  recordedPayments       Payment[]
+  resolvedDuplicateFlags PersonDuplicateFlag[]
+
+  @@index([roleKey])
+}
+
+// ── People ─────────────────────────────────────────────────────────────────
+
+/// One human, system-wide. Program-specific facts (the pledge, the previous
+/// subscription, dormancy) live on ProgramEnrollment, because the same person
+/// can pledge different amounts to the fund and to مواساة. A Person with no
+/// enrollments is valid — someone migrated in but not yet assigned anywhere.
+model Person {
+  id            String    @id @default(uuid())
+  name          String // CHECK "Person_name_not_blank"
+  // The workbook's YYMMNNN number (رقم الحساب). Unique across deleted and
+  // merged rows on purpose: a retired number is never reissued, so an old
+  // paper receipt can never point at two people.
+  accountNumber String    @unique // CHECK "Person_account_number_digits"
+  phone         String?
+  email         String?
+  // Set when a reviewer confirmed this record and another are the same human
+  // and kept the other one (PersonDuplicateService.mergeDuplicate). The row
+  // stays, soft-deleted, so its account number still resolves to someone.
+  // CHECK "Person_merged_is_deleted" keeps merged rows out of every list.
+  mergedIntoId  String?
+  isDeleted     Boolean   @default(false)
+  deletedAt     DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // SetNull: a merge target is never hard-deleted in practice, but if one
+  // were, the merged row must survive as a retired number.
+  mergedInto  Person?             @relation("PersonMerge", fields: [mergedIntoId], references: [id], onDelete: SetNull)
+  mergedFrom  Person[]            @relation("PersonMerge")
+  enrollments ProgramEnrollment[]
+  payments    Payment[]
+  flagsAsA    PersonDuplicateFlag[] @relation("DuplicateFlagPersonA")
+  flagsAsB    PersonDuplicateFlag[] @relation("DuplicateFlagPersonB")
+
+  @@index([mergedIntoId])
+}
+
+enum DuplicateFlagStatus {
+  OPEN // waiting for a human
+  MERGED // confirmed the same person; one record was merged into the other
+  DISMISSED // confirmed different people; a rescan never re-raises the pair
+}
+
+/// A pair of Person records that look like the same human. Raised by the
+/// duplicate scan, resolved only by a person: the workbook has real
+/// near-duplicates (same name, different account numbers in different sheets)
+/// and real namesakes, and only someone who knows the fund can tell them apart.
+model PersonDuplicateFlag {
+  id           String              @id @default(uuid())
+  // Stored in a fixed order (CHECK "PersonDuplicateFlag_ordered_pair") so the
+  // unique index below sees (a, b) and (b, a) as the same pair.
+  personAId    String
+  personBId    String
+  // DuplicateReason codes from src/people/person-duplicate.util.ts — why the
+  // scan thought these match, shown to the reviewer.
+  reasons      String[]
+  status       DuplicateFlagStatus @default(OPEN)
+  resolvedById String?
+  resolvedAt   DateTime?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  // Cascade: a flag is about its two people and means nothing without them.
+  // People are soft-deleted, so this fires only on a deliberate hard delete.
+  personA    Person @relation("DuplicateFlagPersonA", fields: [personAId], references: [id], onDelete: Cascade)
+  personB    Person @relation("DuplicateFlagPersonB", fields: [personBId], references: [id], onDelete: Cascade)
+  // SetNull: the decision outlives the account of whoever made it.
+  resolvedBy User?  @relation(fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  // The dedupe for repeated scans, and personAId's FK index.
+  @@unique([personAId, personBId])
+  @@index([personBId])
+  @@index([status, createdAt])
+}
+
+// ── Programs ───────────────────────────────────────────────────────────────
+
+enum ProgramType {
+  PERIODIC // a standing subscription — the fund's membership, مواساة
+  TEMPORARY // a campaign with an end
+}
+
+/// Any revenue stream. The fund's membership program is a row like every
+/// other, distinguished only by isProtected.
+model Program {
+  id          String      @id @default(uuid())
+  // Unique among live programs, case-insensitively — partial unique index
+  // "Program_live_name_key". CHECK "Program_name_not_blank".
+  name        String
+  type        ProgramType
+  // Independent of type. True: the program keeps Cycle rows with their own
+  // length. False: continuous flow with no cycle boundary.
+  hasCycles   Boolean
+  // True only on the fund's membership program, set by the baseline
+  // migration and never by the API. At most one row — partial unique index
+  // "Program_single_protected".
+  isProtected Boolean     @default(false)
+  sortOrder   Int         @default(0)
+  isDeleted   Boolean     @default(false)
+  deletedAt   DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  cycles           Cycle[]
+  enrollments      ProgramEnrollment[]
+  receivedPayments Payment[]           @relation("PaymentReceiver")
+  paymentsMade     Payment[]           @relation("PaymentPayerProgram")
+
+  @@index([sortOrder])
+}
+
+/// A program's subscription cycle. Lengths are data, never a constant: the
+/// fund has run 5-year, then 4-year cycles and is weighing 3. endYear is
+/// stored so payment reads can filter `year BETWEEN startYear AND endYear` in
+/// SQL; CHECK "Cycle_end_matches_length" stops it drifting.
+model Cycle {
+  id          String   @id @default(uuid())
+  programId   String
+  startYear   Int // CHECK "Cycle_start_year_range": 2000..2100
+  lengthYears Int // CHECK "Cycle_length_range": 1..10
+  endYear     Int // CHECK "Cycle_end_matches_length": startYear + lengthYears - 1
+  // The cycle the program's grid and running totals read from. At most one
+  // per program (partial unique index "Cycle_single_current_per_program");
+  // zero is allowed so a program can exist before its first cycle.
+  isCurrent   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Cascade: a cycle means nothing without its program. Programs are
+  // soft-deleted, so this fires only on a deliberate hard delete.
+  program Program @relation(fields: [programId], references: [id], onDelete: Cascade)
+
+  // EXCLUDE "Cycle_no_overlap_per_program" also forbids two cycles of one
+  // program sharing a year — otherwise "which cycle is 2027 in" has two answers.
+  // Also programId's FK index.
+  @@unique([programId, startYear])
+}
+
+// ── Enrollment ─────────────────────────────────────────────────────────────
+
+enum EnrollmentStatus {
+  ACTIVE
+  DORMANT
+}
+
+/// A Person's participation in one Program. Hard-deleted only while it has
+/// no payments (a mistaken enrollment); with payments it can only go dormant.
+model ProgramEnrollment {
+  id                   String           @id @default(uuid())
+  personId             String
+  programId            String
+  // The pledged yearly amount for this person in this program (معدل الاشتراك
+  // السنوي) — expected revenue. Never derived from payments: it is the
+  // yardstick payments are measured against. Zero means no pledge (a one-time
+  // campaign donor). CHECK "ProgramEnrollment_expected_rate_non_negative".
+  expectedRate         Decimal          @db.Decimal(14, 2)
+  // الاشتراك السابق — everything this person paid this program before its
+  // current cycle, typed in from the old books. Never recomputed: the
+  // payments it summarises predate this system.
+  previousSubscription Decimal          @default(0) @db.Decimal(14, 2)
+  status               EnrollmentStatus @default(ACTIVE)
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  // Restrict on both: an enrollment carries a pledge and anchors payments, so
+  // neither side may vanish under it. People and programs are soft-deleted.
+  person   Person    @relation(fields: [personId], references: [id], onDelete: Restrict)
+  program  Program   @relation(fields: [programId], references: [id], onDelete: Restrict)
+  payments Payment[]
+
+  // One enrollment per person per program; also the target of Payment's
+  // composite FK, and personId's FK index.
+  @@unique([personId, programId])
+  @@index([programId, status])
+}
+
+// ── Payments ───────────────────────────────────────────────────────────────
+
+/// Money a Program received. An empty grid cell has no row at all, so "not
+/// paid" never needs a sentinel value.
+model Payment {
+  id                String    @id @default(uuid())
+  // The receiving program. Every revenue total filters on this column.
+  programId         String
+  // ── The payer: exactly one of these three — CHECK "Payment_exactly_one_payer".
+  // A registered, enrolled person.
+  personId          String?
+  // Someone not in the system at all — a one-off campaign donor. Dated
+  // entries only (CHECK "Payment_freetext_is_dated"): a stranger has no row
+  // in a monthly grid.
+  payerNameFreetext String?
+  // Another program paying out of its own funds — e.g. the fund donating to a
+  // campaign. Revenue for programId only; never counted toward the payer's
+  // revenue or collection ratio. CHECK "Payment_not_self_transfer".
+  // TODO(expenses): once the Expenses module exists, the same transaction must
+  // also appear as an expense on payerProgramId, linked to this row, so the
+  // payer's books balance. Today it is visible only from the receiving side.
+  payerProgramId    String?
+  // ── The amount
+  // NULL exactly when starred, positive otherwise —
+  // CHECK "Payment_amount_matches_star". A zero would read as "paid" in the
+  // grid but add nothing; an empty cell is the zero.
+  amount            Decimal?  @db.Decimal(14, 2)
+  // ★ — paid, but recorded under a different month. Contributes 0 to every
+  // sum. Monthly cells only (CHECK "Payment_star_is_monthly").
+  isStarred         Boolean   @default(false)
+  // ── When: a monthly cell (month set) or a dated entry (paymentDate set),
+  // never both — CHECK "Payment_month_or_date". year is stored for both so
+  // every total groups on one column; for dated entries
+  // CHECK "Payment_year_matches_date" pins it to the date.
+  year              Int
+  month             Int? // CHECK "Payment_month_range": 1..12
+  paymentDate       DateTime? @db.Date
+  // Client-generated key for a dated entry, so a double-submitted form books
+  // the payment once. Grid cells need none: their unique key is the dedupe.
+  idempotencyKey    String?   @unique
+  // Who last wrote this row.
+  recordedById      String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  // Restrict throughout: a payment is part of the books and must never vanish
+  // because something it points at was removed.
+  program      Program            @relation("PaymentReceiver", fields: [programId], references: [id], onDelete: Restrict)
+  person       Person?            @relation(fields: [personId], references: [id], onDelete: Restrict)
+  payerProgram Program?           @relation("PaymentPayerProgram", fields: [payerProgramId], references: [id], onDelete: Restrict)
+  // The payer must be enrolled in the receiving program. ON UPDATE CASCADE
+  // (set in migration SQL; Prisma calls it onUpdate) is what lets a duplicate
+  // merge move an enrollment to the surviving person and carry its payments
+  // along in one statement.
+  enrollment   ProgramEnrollment? @relation(fields: [personId, programId], references: [personId, programId], onUpdate: Cascade, onDelete: Restrict)
+  // SetNull: the payment outlives the account of whoever typed it in.
+  recordedBy   User?              @relation(fields: [recordedById], references: [id], onDelete: SetNull)
+
+  // One monthly cell per payer per program per month — the constraint is the
+  // dedupe, so a double-click on save upserts instead of adding a row.
+  // Postgres treats NULLs as distinct, so dated entries (month NULL) and rows
+  // of the other payer kind never collide here.
+  @@unique([programId, personId, year, month])
+  @@unique([programId, payerProgramId, year, month])
+  // Every summary reads one program's year.
+  @@index([programId, year])
+  @@index([personId])
+  @@index([payerProgramId, year])
+  @@index([recordedById])
+}

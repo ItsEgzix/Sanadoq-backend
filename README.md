@@ -1,98 +1,110 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Sanadoq API — Eradat (الإيرادات)
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+NestJS + Prisma 7 + Postgres API for the fund's revenue books. Every revenue
+stream is a **Program** — the fund's own membership (protected), مواساة,
+جامع السعيد, each campaign. Each human is one **Person**, linked to the
+programs they pay into by a **ProgramEnrollment** that carries that program's
+pledge. **Payments** come from an enrolled person, another program, or a
+free-text name for someone who is in no directory at all.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
-
-## Description
-
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
-
-## Project setup
+## Run it
 
 ```bash
-$ npm install
+npm install
+npm run db:migrate             # prisma migrate deploy — migrations are hand-written SQL
+npm run db:generate
+npm run create:user -- --email you@example.org --name "Your Name" --apply   # first account; prints a one-time password
+npm run seed:demo -- --apply   # optional demo data; omit --apply for a dry run
+npm run start:dev              # http://localhost:5050
 ```
 
-## Compile and run the project
+| Variable              | Required | Default                 | Notes                                                                    |
+| --------------------- | -------- | ----------------------- | ------------------------------------------------------------------------ |
+| `DATABASE_URL`        | yes      | —                       | `postgres://` URL (Neon's pooled string). Not `prisma+postgres://`.      |
+| `JWT_SECRET`          | yes      | —                       | 32+ chars; signs access and refresh tokens. Changing it signs all out.   |
+| `DATABASE_SCHEMA`     | no       | `public`                | Run against an isolated schema of the same database (tests, checks).     |
+| `PORT`                | no       | `5050`                  | 5000 is the frontend; `prisma dev` takes 5001.                           |
+| `CORS_ORIGIN`         | no       | `http://localhost:5000` | The frontend's origin; credentials are allowed for exactly this origin.  |
+| `TRUST_PROXY_HOPS`    | no       | `0`                     | Proxies in front of the API, so the login throttle sees real client IPs. |
+| `LEGACY_DATABASE_URL` | no       | —                       | Only for `migrate:legacy-eradat` (old Member-shaped data).               |
 
-```bash
-# development
-$ npm run start
+Tests: `npm test` (unit), `npm run test:e2e` (boots the app against `DATABASE_URL`/`DATABASE_SCHEMA`; writes nothing).
 
-# watch mode
-$ npm run start:dev
+## Access
 
-# production mode
-$ npm run start:prod
-```
+Sign-in is email + password (Argon2id). The access token is short-lived and
+held in memory by the frontend; the refresh token is an httpOnly cookie scoped
+to `/auth`. Every route declares `@Public()`, `@AnyAuthenticated()` or
+`@RequirePermission(...)`; the global `AuthGuard` refuses a route that declares
+nothing. Authorisation checks a **permission** held by the user's **Role** row —
+never a specific user — so a second role (say, a collector) is an `INSERT INTO
+"Role"`, not a code change. Today there is one role, `FUND_MANAGER`, holding
+`MANAGE_FUND`, and every account has it. Accounts are switched off, never deleted.
 
-## Run tests
+## Layout
 
-```bash
-# unit tests
-$ npm run test
+| Path                | Owns                                                                                              |
+| ------------------- | ------------------------------------------------------------------------------------------------- |
+| `src/auth/`         | Login, refresh, logout, password change; `AuthGuard`; permissions (`auth.constant.ts`)            |
+| `src/users/`        | The account list: create, switch on/off, reset another's password                                 |
+| `src/programs/`     | Programs; protection rules for the fund's membership program; entry mode (`program.util.ts`)      |
+| `src/cycles/`       | Each program's own cycles; `resolveWindow` — which years a program's books open on and accept     |
+| `src/people/`       | People directory; the duplicate review queue — matching rules in `person-duplicate.util.ts`       |
+| `src/enrollments/`  | Who is in which program, with that program's pledge and previous subscription                     |
+| `src/payments/`     | Monthly cells (amount / ★ / clear) and dated ledger entries                                       |
+| `src/eradat/`       | Read side: per-program summary, grid lines, transfer lines, ledger; formulas in `revenue.util.ts` |
+| `src/common/`       | `AppException`, global filter/interceptor, env schema, access decorators, money/date schemas      |
+| `src/prisma/`       | `PrismaService` (soft-delete filtered) + extension                                                |
+| `src/scripts/`      | `create:user`, `seed:demo`, `migrate:legacy-eradat` — all dry-run unless `--apply`                |
+| `src/i18n/{en,ar}/` | Every success/error message, in English and Arabic                                                |
+| `prisma/`           | `schema.prisma` (layout map at the top) and the hand-written baseline migration                   |
 
-# e2e tests
-$ npm run test:e2e
+## How the books work
 
-# test coverage
-$ npm run test:cov
-```
+- **Entry mode.** A `PERIODIC` program with cycles keeps the monthly grid of
+  the workbook (one cell per payer per month, ★ = paid but recorded under
+  another month, counts 0). Every other program keeps a dated ledger.
+- **Payers.** Exactly one of: an enrolled person, another program, or a
+  free-text name — enforced by a CHECK. A person payer must be enrolled in the
+  receiving program — enforced by a composite foreign key.
+- **Program → program payments** (the fund paying مواساة or a campaign) are
+  revenue of the receiving program only, never of the payer. They show as
+  "paid to other programs" on the payer's summary.
+  `TODO(expenses)`: once an Expenses module exists, the same transaction must
+  also be booked as the payer's expense, linked to the payment.
+- **Collection ratio** is per program: the sum of its enrollments' pledges ÷
+  that year's payments by enrolled people. Transfers and one-off gifts are
+  revenue but answer no pledge, so they stay out of the ratio.
+- **Duplicates are never merged automatically.** Saving a person, and
+  `POST /people/duplicates/scan`, raise review flags; a person merges or
+  dismisses each one. Merging moves the other record's enrollments (and, by
+  the FK's `ON UPDATE CASCADE`, its payments) and retires its account number.
 
-## Deployment
+## API
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+| Method & path                                                                                           | Does                                                |
+| ------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `POST /auth/login`, `/auth/refresh`, `/auth/logout`, `/auth/password`; `GET /auth/me`                   | Session                                             |
+| `GET/POST /users`, `PATCH /users/:id`, `POST /users/:id/password`                                       | Accounts                                            |
+| `GET/POST /programs`, `GET/PATCH/DELETE /programs/:id`                                                  | Programs (the protected one refuses delete/reshape) |
+| `GET/POST …/:id/cycles`, `GET …/cycles/current`, `PATCH …/cycles/:cid`, `POST …/cycles/:cid/activate`   | A program's cycles                                  |
+| `GET/POST …/:id/enrollments`, `PATCH/DELETE …/enrollments/:eid`, `POST …/enrollments/:eid/mark-dormant` | Enrollments                                         |
+| `PUT/DELETE …/:id/cells/people/:personId/:year/:month`                                                  | A person's grid cell                                |
+| `PUT/DELETE …/:id/cells/programs/:payerProgramId/:year/:month`                                          | Another program's grid cell                         |
+| `POST …/:id/payments`, `DELETE …/:id/payments/:paymentId`                                               | Dated ledger entries                                |
+| `GET …/:id/summary`, `…/lines`, `…/transfer-lines`, `…/payments`                                        | Read side                                           |
+| `GET/POST /people`, `GET/PATCH/DELETE /people/:id`                                                      | People                                              |
+| `GET /people/duplicates`, `POST …/scan`, `POST …/:fid/merge`, `POST …/:fid/dismiss`                     | Duplicate review                                    |
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+(`…` = `/programs`.)
 
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
+## Deliberately not built yet
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+Each has a service method that throws `FEATURE_PENDING_CONFIRMATION` (501)
+and a disabled control in the UI, so implementing it replaces one `throw`:
 
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+- Advance payments — `PaymentService.recordAdvancePayment`. Writes outside a program's current cycle are refused meanwhile.
+- Dormant reactivation — `EnrollmentService.reactivateEnrollment` (the only DORMANT → ACTIVE path).
+- Mid-cycle rate changes — `EnrollmentService.scheduleRateChange`.
+- Collector assignment — `EnrollmentService.assignCollector`.
+- Expenses (المصروفات) — not started; see `TODO(expenses)` on `Payment.payerProgramId`.
