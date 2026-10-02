@@ -1,9 +1,9 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
-import type { Prisma } from 'generated/prisma/client';
-import { AppException } from 'src/common/exceptions/app.exception';
-import { assertNoBlockers } from 'src/common/utils/blockers.util';
-import { errorMessage } from 'src/common/utils/error.util';
-import { PrismaService } from 'src/prisma/prisma.service';
+import type { Prisma } from '../../generated/prisma/client';
+import { AppException } from '../common/exceptions/app.exception';
+import { assertNoBlockers } from '../common/utils/blockers.util';
+import { errorMessage } from '../common/utils/error.util';
+import { PrismaService } from '../prisma/prisma.service';
 import type { ListDuplicatesQueryDto } from './dto/list-duplicates-query.dto';
 import type { MergeDuplicateDto } from './dto/merge-duplicate.dto';
 import {

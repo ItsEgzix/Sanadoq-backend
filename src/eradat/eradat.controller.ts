@@ -1,6 +1,6 @@
 import { Controller, Get, Param, Query } from '@nestjs/common';
-import { PERMISSIONS } from 'src/auth/auth.constant';
-import { RequirePermission } from 'src/common/decorators/access.decorator';
+import { PERMISSIONS } from '../auth/auth.constant';
+import { RequirePermission } from '../common/decorators/access.decorator';
 import { EradatYearQueryDto } from './dto/eradat-year-query.dto';
 import { LedgerQueryDto } from './dto/ledger-query.dto';
 import { LinesQueryDto } from './dto/lines-query.dto';

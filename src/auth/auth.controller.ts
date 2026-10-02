@@ -14,11 +14,11 @@ import type { Request, Response } from 'express';
 import {
   AnyAuthenticated,
   Public,
-} from 'src/common/decorators/access.decorator';
+} from '../common/decorators/access.decorator';
 import {
   CurrentUser,
   type CurrentUserPayload,
-} from 'src/common/decorators/current-user.decorator';
+} from '../common/decorators/current-user.decorator';
 import {
   LOGIN_THROTTLE,
   REFRESH_COOKIE_NAME,

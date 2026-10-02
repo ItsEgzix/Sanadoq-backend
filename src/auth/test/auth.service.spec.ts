@@ -1,4 +1,4 @@
-import type { PrismaService } from 'src/prisma/prisma.service';
+import type { PrismaService } from '../../prisma/prisma.service';
 import { AuthService } from '../auth.service';
 import * as passwordUtil from '../password.util';
 import type { TokenService } from '../token.service';

@@ -1,4 +1,4 @@
-import type { Prisma } from 'generated/prisma/client';
+import type { Prisma } from '../../generated/prisma/client';
 
 // A fund's handful of treasurers and collectors. The cap keeps the list a
 // plain array rather than a cursor page.

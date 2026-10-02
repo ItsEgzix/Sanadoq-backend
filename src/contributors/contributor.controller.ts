@@ -8,8 +8,8 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { PERMISSIONS } from 'src/auth/auth.constant';
-import { RequirePermission } from 'src/common/decorators/access.decorator';
+import { PERMISSIONS } from '../auth/auth.constant';
+import { RequirePermission } from '../common/decorators/access.decorator';
 import { CreateContributorDto } from './dto/create-contributor.dto';
 import { ListContributorsQueryDto } from './dto/list-contributors-query.dto';
 import { UpdateContributorDto } from './dto/update-contributor.dto';

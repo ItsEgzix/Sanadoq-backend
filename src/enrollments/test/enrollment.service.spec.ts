@@ -1,7 +1,7 @@
-import { Prisma } from 'generated/prisma/client';
-import type { ContributorService } from 'src/contributors/contributor.service';
-import type { ProgramService } from 'src/programs/program.service';
-import type { PrismaService } from 'src/prisma/prisma.service';
+import { Prisma } from '../../../generated/prisma/client';
+import type { ContributorService } from '../../contributors/contributor.service';
+import type { ProgramService } from '../../programs/program.service';
+import type { PrismaService } from '../../prisma/prisma.service';
 import { EnrollmentService } from '../enrollment.service';
 
 const mockPrisma = {

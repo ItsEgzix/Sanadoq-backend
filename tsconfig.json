@@ -20,15 +20,11 @@
     "noImplicitAny": false,
     "strictBindCallApply": false,
     "noFallthroughCasesInSwitch": false,
-    "baseUrl": "./",
-    "paths": {
-      "src/*": [
-        "src/*"
-      ],
-      "generated/*": [
-        "generated/*"
-      ]
-    },
+    // No baseUrl or paths aliases, deliberately. Vercel's NestJS builder
+    // compiles src/main.ts itself, ships only the files it reaches through
+    // relative imports, and never rewrites an alias — so a 'src/...' import
+    // compiles here and crashes the deployed function at boot. Without an
+    // alias, tsc rejects it locally instead.
     "useUnknownInCatchVariables": true
   }
 }

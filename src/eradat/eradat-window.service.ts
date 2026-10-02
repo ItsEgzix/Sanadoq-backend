@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { CycleService, type ProgramWindow } from 'src/cycles/cycle.service';
-import { PrismaService } from 'src/prisma/prisma.service';
+import { CycleService, type ProgramWindow } from '../cycles/cycle.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 // Payment years are 2000..2100 (CHECK "Payment_year_range"), so this bounds
 // the distinct-years read by construction.

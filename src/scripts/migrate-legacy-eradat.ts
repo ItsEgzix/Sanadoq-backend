@@ -36,8 +36,8 @@
  */
 import 'dotenv/config';
 import { Client } from 'pg';
-import type { Prisma } from 'generated/prisma/client';
-import { findDuplicatePairs } from 'src/contributors/contributor-duplicate.util';
+import type { Prisma } from '../../generated/prisma/client';
+import { findDuplicatePairs } from '../contributors/contributor-duplicate.util';
 import {
   describeDatabase,
   matchContributorsByAccount,

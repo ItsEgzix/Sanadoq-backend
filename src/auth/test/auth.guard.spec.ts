@@ -3,8 +3,8 @@ import { Reflector } from '@nestjs/core';
 import {
   ACCESS_METADATA,
   type RouteAccess,
-} from 'src/common/decorators/access.decorator';
-import type { PrismaService } from 'src/prisma/prisma.service';
+} from '../../common/decorators/access.decorator';
+import type { PrismaService } from '../../prisma/prisma.service';
 import { AuthGuard } from '../guards/auth.guard';
 import type { TokenService } from '../token.service';
 

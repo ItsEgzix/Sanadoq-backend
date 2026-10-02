@@ -1,13 +1,13 @@
 import { Injectable } from '@nestjs/common';
-import type { Prisma } from 'generated/prisma/client';
+import type { Prisma } from '../../generated/prisma/client';
 import {
   sumMoney,
   toMoneyString,
   toRatioString,
   ZERO,
-} from 'src/common/utils/money.util';
-import type { EntryMode } from 'src/programs/program.util';
-import { PrismaService } from 'src/prisma/prisma.service';
+} from '../common/utils/money.util';
+import type { EntryMode } from '../programs/program.util';
+import { PrismaService } from '../prisma/prisma.service';
 import type { EradatYearQueryDto } from './dto/eradat-year-query.dto';
 import { EradatWindowService } from './eradat-window.service';
 import { collectionRatio, runningTotal } from './revenue.util';

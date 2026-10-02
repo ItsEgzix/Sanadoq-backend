@@ -1,16 +1,16 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import type { Prisma } from 'generated/prisma/client';
-import { AppException } from 'src/common/exceptions/app.exception';
-import { pendingFeature } from 'src/common/utils/pending-feature.util';
+import type { Prisma } from '../../generated/prisma/client';
+import { AppException } from '../common/exceptions/app.exception';
+import { pendingFeature } from '../common/utils/pending-feature.util';
 import {
   isForeignKeyViolation,
   isUniqueViolation,
-} from 'src/common/utils/prisma-error.util';
-import { CONTRIBUTOR_SELECT } from 'src/contributors/contributor.constant';
-import { ContributorService } from 'src/contributors/contributor.service';
-import type { ProgramRow } from 'src/programs/program.constant';
-import { ProgramService } from 'src/programs/program.service';
-import { PrismaService } from 'src/prisma/prisma.service';
+} from '../common/utils/prisma-error.util';
+import { CONTRIBUTOR_SELECT } from '../contributors/contributor.constant';
+import { ContributorService } from '../contributors/contributor.service';
+import type { ProgramRow } from '../programs/program.constant';
+import { ProgramService } from '../programs/program.service';
+import { PrismaService } from '../prisma/prisma.service';
 import type { CreateEnrollmentDto } from './dto/create-enrollment.dto';
 import type { ListEnrollmentsQueryDto } from './dto/list-enrollments-query.dto';
 import type { UpdateEnrollmentDto } from './dto/update-enrollment.dto';

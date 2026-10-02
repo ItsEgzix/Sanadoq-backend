@@ -12,8 +12,8 @@
 import 'dotenv/config';
 import { randomBytes } from 'node:crypto';
 import { parseArgs } from 'node:util';
-import { emailSchema } from 'src/auth/auth.schema';
-import { hashPassword } from 'src/auth/password.util';
+import { emailSchema } from '../auth/auth.schema';
+import { hashPassword } from '../auth/password.util';
 import { openDatabase } from './script.util';
 
 async function main() {

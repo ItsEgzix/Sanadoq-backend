@@ -8,12 +8,12 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { PERMISSIONS } from 'src/auth/auth.constant';
-import { RequirePermission } from 'src/common/decorators/access.decorator';
+import { PERMISSIONS } from '../auth/auth.constant';
+import { RequirePermission } from '../common/decorators/access.decorator';
 import {
   CurrentUser,
   type CurrentUserPayload,
-} from 'src/common/decorators/current-user.decorator';
+} from '../common/decorators/current-user.decorator';
 import { ListDuplicatesQueryDto } from './dto/list-duplicates-query.dto';
 import { MergeDuplicateDto } from './dto/merge-duplicate.dto';
 import { ContributorDuplicateService } from './contributor-duplicate.service';

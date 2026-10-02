@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { I18nContext, I18nService } from 'nestjs-i18n';
 import { map, type Observable } from 'rxjs';
-import { translateEvent } from 'src/common/utils/translate.util';
+import { translateEvent } from '../utils/translate.util';
 
 interface SuccessEnvelope {
   successCode: string;

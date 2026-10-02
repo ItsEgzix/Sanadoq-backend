@@ -1,8 +1,8 @@
-import { Prisma } from 'generated/prisma/client';
-import type { PrismaService } from 'src/prisma/prisma.service';
+import { Prisma } from '../../../generated/prisma/client';
+import type { PrismaService } from '../../prisma/prisma.service';
 import { UserService } from '../user.service';
 
-jest.mock('src/auth/password.util', () => ({
+jest.mock('../../auth/password.util', () => ({
   hashPassword: jest.fn().mockResolvedValue('$argon2id$hash'),
 }));
 

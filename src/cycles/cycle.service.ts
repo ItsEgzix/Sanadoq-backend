@@ -1,9 +1,9 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import { AppException } from 'src/common/exceptions/app.exception';
-import type { ProgramRow } from 'src/programs/program.constant';
-import { ProgramService } from 'src/programs/program.service';
-import { toProgramView, type ProgramView } from 'src/programs/program.util';
-import { PrismaService } from 'src/prisma/prisma.service';
+import { AppException } from '../common/exceptions/app.exception';
+import type { ProgramRow } from '../programs/program.constant';
+import { ProgramService } from '../programs/program.service';
+import { toProgramView, type ProgramView } from '../programs/program.util';
+import { PrismaService } from '../prisma/prisma.service';
 import { CYCLE_LIST_CAP, CYCLE_SELECT, type CycleRow } from './cycle.constant';
 import {
   clampYearToCycle,

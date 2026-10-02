@@ -1,5 +1,5 @@
-import type { Prisma } from 'generated/prisma/client';
-import { CYCLE_SELECT } from 'src/cycles/cycle.constant';
+import type { Prisma } from '../../generated/prisma/client';
+import { CYCLE_SELECT } from '../cycles/cycle.constant';
 
 // The fund, its standing programs and every campaign it has run. The cap
 // keeps the sidebar list a plain array and bounds per-program fan-out.

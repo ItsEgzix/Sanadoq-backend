@@ -1,4 +1,4 @@
-import { Prisma } from 'generated/prisma/client';
+import { Prisma } from '../../generated/prisma/client';
 
 /**
  * Models whose rows are soft-deleted. A model that gains `isDeleted` joins

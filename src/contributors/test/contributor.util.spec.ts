@@ -1,4 +1,4 @@
-import { Prisma } from 'generated/prisma/client';
+import { Prisma } from '../../../generated/prisma/client';
 import { toYearActivity } from '../contributor.util';
 
 const paid = (month: number | null, amount: number, count = 1) => ({

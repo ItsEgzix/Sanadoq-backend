@@ -1,18 +1,18 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import type { Prisma } from 'generated/prisma/client';
-import { AppException } from 'src/common/exceptions/app.exception';
-import { ZERO } from 'src/common/utils/money.util';
-import { EnrollmentService } from 'src/enrollments/enrollment.service';
-import { toEnrollmentView } from 'src/enrollments/enrollment.util';
+import type { Prisma } from '../../generated/prisma/client';
+import { AppException } from '../common/exceptions/app.exception';
+import { ZERO } from '../common/utils/money.util';
+import { EnrollmentService } from '../enrollments/enrollment.service';
+import { toEnrollmentView } from '../enrollments/enrollment.util';
 import {
   PAYMENT_CELL_SELECT,
   PAYMENT_ENTRY_SELECT,
   type PaymentCellRow,
-} from 'src/payments/payment.constant';
-import { toPaymentEntryView } from 'src/payments/payment.util';
-import { PROGRAM_CAP } from 'src/programs/program.constant';
-import type { EntryMode, ProgramView } from 'src/programs/program.util';
-import { PrismaService } from 'src/prisma/prisma.service';
+} from '../payments/payment.constant';
+import { toPaymentEntryView } from '../payments/payment.util';
+import { PROGRAM_CAP } from '../programs/program.constant';
+import type { EntryMode, ProgramView } from '../programs/program.util';
+import { PrismaService } from '../prisma/prisma.service';
 import type { EradatYearQueryDto } from './dto/eradat-year-query.dto';
 import type { LedgerQueryDto } from './dto/ledger-query.dto';
 import type { LinesQueryDto } from './dto/lines-query.dto';

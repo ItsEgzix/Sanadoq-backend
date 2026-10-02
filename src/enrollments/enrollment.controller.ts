@@ -8,8 +8,8 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { PERMISSIONS } from 'src/auth/auth.constant';
-import { RequirePermission } from 'src/common/decorators/access.decorator';
+import { PERMISSIONS } from '../auth/auth.constant';
+import { RequirePermission } from '../common/decorators/access.decorator';
 import { CreateEnrollmentDto } from './dto/create-enrollment.dto';
 import { ListEnrollmentsQueryDto } from './dto/list-enrollments-query.dto';
 import { UpdateEnrollmentDto } from './dto/update-enrollment.dto';

@@ -1,5 +1,5 @@
-import type { Prisma } from 'generated/prisma/client';
-import { CONTRIBUTOR_SELECT } from 'src/contributors/contributor.constant';
+import type { Prisma } from '../../generated/prisma/client';
+import { CONTRIBUTOR_SELECT } from '../contributors/contributor.constant';
 
 // The enrollment's own columns. Pages of enrollments load their contributors
 // in a separate query (EnrollmentService.attachContributors) that can run

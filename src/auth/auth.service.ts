@@ -1,7 +1,7 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import type { Prisma } from 'generated/prisma/client';
-import { AppException } from 'src/common/exceptions/app.exception';
-import { PrismaService } from 'src/prisma/prisma.service';
+import type { Prisma } from '../../generated/prisma/client';
+import { AppException } from '../common/exceptions/app.exception';
+import { PrismaService } from '../prisma/prisma.service';
 import type { ChangePasswordDto } from './dto/change-password.dto';
 import type { LoginDto } from './dto/login.dto';
 import {

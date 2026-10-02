@@ -24,8 +24,8 @@
  * invented.
  */
 import 'dotenv/config';
-import type { Prisma, PrismaClient } from 'generated/prisma/client';
-import { findDuplicatePairs } from 'src/contributors/contributor-duplicate.util';
+import type { Prisma, PrismaClient } from '../../generated/prisma/client';
+import { findDuplicatePairs } from '../contributors/contributor-duplicate.util';
 import { matchContributorsByAccount, openDatabase } from './script.util';
 
 const APPLY = process.argv.includes('--apply');

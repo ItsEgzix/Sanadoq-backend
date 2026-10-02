@@ -1,5 +1,5 @@
 import { HttpStatus } from '@nestjs/common';
-import { AppException } from 'src/common/exceptions/app.exception';
+import { AppException } from '../exceptions/app.exception';
 
 /** Something that still points at a record a caller asked to remove. */
 export interface Blocker {

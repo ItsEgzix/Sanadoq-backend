@@ -1,6 +1,6 @@
 import { createZodDto } from 'nestjs-zod';
-import { isoDateSchema } from 'src/common/schemas/date.schema';
-import { positiveMoneySchema } from 'src/common/schemas/money.schema';
+import { isoDateSchema } from '../../common/schemas/date.schema';
+import { positiveMoneySchema } from '../../common/schemas/money.schema';
 import { z } from 'zod';
 
 // Exactly one payer, by construction: the union admits one kind at a time,

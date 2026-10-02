@@ -1,10 +1,10 @@
 import { Body, Controller, Delete, Param, Post, Put } from '@nestjs/common';
-import { PERMISSIONS } from 'src/auth/auth.constant';
-import { RequirePermission } from 'src/common/decorators/access.decorator';
+import { PERMISSIONS } from '../auth/auth.constant';
+import { RequirePermission } from '../common/decorators/access.decorator';
 import {
   CurrentUser,
   type CurrentUserPayload,
-} from 'src/common/decorators/current-user.decorator';
+} from '../common/decorators/current-user.decorator';
 import {
   ContributorCellParamsDto,
   ProgramCellParamsDto,

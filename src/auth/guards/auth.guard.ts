@@ -9,11 +9,11 @@ import { Reflector } from '@nestjs/core';
 import {
   ACCESS_METADATA,
   type RouteAccess,
-} from 'src/common/decorators/access.decorator';
-import type { AuthenticatedRequest } from 'src/common/decorators/current-user.decorator';
-import { AppException } from 'src/common/exceptions/app.exception';
-import { errorMessage } from 'src/common/utils/error.util';
-import { PrismaService } from 'src/prisma/prisma.service';
+} from '../../common/decorators/access.decorator';
+import type { AuthenticatedRequest } from '../../common/decorators/current-user.decorator';
+import { AppException } from '../../common/exceptions/app.exception';
+import { errorMessage } from '../../common/utils/error.util';
+import { PrismaService } from '../../prisma/prisma.service';
 import type { TokenClaims } from '../auth.schema';
 import { TokenService } from '../token.service';
 

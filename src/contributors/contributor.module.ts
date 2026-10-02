@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { PrismaModule } from 'src/prisma/prisma.module';
+import { PrismaModule } from '../prisma/prisma.module';
 import { ContributorDuplicateController } from './contributor-duplicate.controller';
 import { ContributorDuplicateService } from './contributor-duplicate.service';
 import { ContributorController } from './contributor.controller';

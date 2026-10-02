@@ -1,7 +1,7 @@
 import { PrismaPg } from '@prisma/adapter-pg';
-import { PrismaClient } from 'generated/prisma/client';
-import { findDuplicatePairs } from 'src/contributors/contributor-duplicate.util';
-import { CONTRIBUTOR_SCAN_CAP } from 'src/contributors/contributor.constant';
+import { PrismaClient } from '../../generated/prisma/client';
+import { findDuplicatePairs } from '../contributors/contributor-duplicate.util';
+import { CONTRIBUTOR_SCAN_CAP } from '../contributors/contributor.constant';
 
 /**
  * Shared by the one-off scripts: open a client on DATABASE_URL (and

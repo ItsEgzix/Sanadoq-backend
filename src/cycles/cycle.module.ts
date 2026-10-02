@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
-import { PrismaModule } from 'src/prisma/prisma.module';
-import { ProgramModule } from 'src/programs/program.module';
+import { PrismaModule } from '../prisma/prisma.module';
+import { ProgramModule } from '../programs/program.module';
 import { CycleController } from './cycle.controller';
 import { CycleService } from './cycle.service';
 

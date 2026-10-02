@@ -1,6 +1,6 @@
 import { createZodDto } from 'nestjs-zod';
-import { moneySchema } from 'src/common/schemas/money.schema';
-import { createContributorSchema } from 'src/contributors/dto/create-contributor.dto';
+import { moneySchema } from '../../common/schemas/money.schema';
+import { createContributorSchema } from '../../contributors/dto/create-contributor.dto';
 import { z } from 'zod';
 
 // No `status`: enrollments start ACTIVE, go dormant through POST

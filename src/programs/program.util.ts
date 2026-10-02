@@ -1,5 +1,5 @@
-import type { ProgramType } from 'generated/prisma/client';
-import { toCycleView } from 'src/cycles/cycle.util';
+import type { ProgramType } from '../../generated/prisma/client';
+import { toCycleView } from '../cycles/cycle.util';
 import type { ProgramRow } from './program.constant';
 
 /**

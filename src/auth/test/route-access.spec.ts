@@ -1,13 +1,13 @@
 import { PATH_METADATA } from '@nestjs/common/constants';
-import { ACCESS_METADATA } from 'src/common/decorators/access.decorator';
-import { CycleController } from 'src/cycles/cycle.controller';
-import { EnrollmentController } from 'src/enrollments/enrollment.controller';
-import { EradatController } from 'src/eradat/eradat.controller';
-import { PaymentController } from 'src/payments/payment.controller';
-import { ContributorDuplicateController } from 'src/contributors/contributor-duplicate.controller';
-import { ContributorController } from 'src/contributors/contributor.controller';
-import { ProgramController } from 'src/programs/program.controller';
-import { UserController } from 'src/users/user.controller';
+import { ACCESS_METADATA } from '../../common/decorators/access.decorator';
+import { CycleController } from '../../cycles/cycle.controller';
+import { EnrollmentController } from '../../enrollments/enrollment.controller';
+import { EradatController } from '../../eradat/eradat.controller';
+import { PaymentController } from '../../payments/payment.controller';
+import { ContributorDuplicateController } from '../../contributors/contributor-duplicate.controller';
+import { ContributorController } from '../../contributors/contributor.controller';
+import { ProgramController } from '../../programs/program.controller';
+import { UserController } from '../../users/user.controller';
 import { AuthController } from '../auth.controller';
 
 const CONTROLLERS = [

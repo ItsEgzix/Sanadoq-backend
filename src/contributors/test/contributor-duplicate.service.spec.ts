@@ -1,4 +1,4 @@
-import type { PrismaService } from 'src/prisma/prisma.service';
+import type { PrismaService } from '../../prisma/prisma.service';
 import { ContributorDuplicateService } from '../contributor-duplicate.service';
 
 const mockPrisma = {

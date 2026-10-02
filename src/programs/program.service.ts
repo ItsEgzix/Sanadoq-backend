@@ -1,9 +1,9 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import type { Prisma } from 'generated/prisma/client';
-import { AppException } from 'src/common/exceptions/app.exception';
-import { isUniqueViolation } from 'src/common/utils/prisma-error.util';
-import { CYCLE_SELECT, type CycleRow } from 'src/cycles/cycle.constant';
-import { PrismaService } from 'src/prisma/prisma.service';
+import type { Prisma } from '../../generated/prisma/client';
+import { AppException } from '../common/exceptions/app.exception';
+import { isUniqueViolation } from '../common/utils/prisma-error.util';
+import { CYCLE_SELECT, type CycleRow } from '../cycles/cycle.constant';
+import { PrismaService } from '../prisma/prisma.service';
 import type { CreateProgramDto } from './dto/create-program.dto';
 import type { UpdateProgramDto } from './dto/update-program.dto';
 import {

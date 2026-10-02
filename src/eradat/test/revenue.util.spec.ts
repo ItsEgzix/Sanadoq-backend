@@ -1,5 +1,5 @@
-import { Prisma } from 'generated/prisma/client';
-import type { PaymentCellRow } from 'src/payments/payment.constant';
+import { Prisma } from '../../../generated/prisma/client';
+import type { PaymentCellRow } from '../../payments/payment.constant';
 import {
   buildGridLine,
   buildLedgerLine,

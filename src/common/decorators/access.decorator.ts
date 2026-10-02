@@ -1,5 +1,5 @@
 import { SetMetadata } from '@nestjs/common';
-import type { Permission } from 'src/auth/auth.constant';
+import type { Permission } from '../../auth/auth.constant';
 
 export const ACCESS_METADATA = 'sanadoq:access';
 

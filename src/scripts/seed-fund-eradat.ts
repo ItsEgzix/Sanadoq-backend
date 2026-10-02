@@ -37,9 +37,9 @@
  */
 import 'dotenv/config';
 import { parseArgs } from 'node:util';
-import type { Prisma, PrismaClient } from 'generated/prisma/client';
+import type { Prisma, PrismaClient } from '../../generated/prisma/client';
 import { readSheet } from 'read-excel-file/node';
-import { CONTRIBUTOR_ACCOUNT_NUMBER_PATTERN } from 'src/contributors/contributor.constant';
+import { CONTRIBUTOR_ACCOUNT_NUMBER_PATTERN } from '../contributors/contributor.constant';
 import { openDatabase } from './script.util';
 import {
   accountText,

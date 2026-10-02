@@ -1,5 +1,5 @@
-import type { Prisma } from 'generated/prisma/client';
-import { PROGRAM_CAP } from 'src/programs/program.constant';
+import type { Prisma } from '../../generated/prisma/client';
+import { PROGRAM_CAP } from '../programs/program.constant';
 
 // The workbook's YYMMNNN account number. Mirrors CHECK
 // "Contributor_account_number_digits"; the DTO rejects early with a readable

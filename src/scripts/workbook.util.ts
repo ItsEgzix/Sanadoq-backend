@@ -12,8 +12,8 @@ import { readSheet } from 'read-excel-file/node';
 import {
   duplicateReasons,
   nameTokens,
-} from 'src/contributors/contributor-duplicate.util';
-import { CONTRIBUTOR_ACCOUNT_NUMBER_PATTERN } from 'src/contributors/contributor.constant';
+} from '../contributors/contributor-duplicate.util';
+import { CONTRIBUTOR_ACCOUNT_NUMBER_PATTERN } from '../contributors/contributor.constant';
 import type { PlannedContributor } from './script.util';
 
 export const FUND_SHEET = 'الايرادات';

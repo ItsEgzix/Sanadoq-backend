@@ -1,4 +1,4 @@
-import type { Prisma } from 'generated/prisma/client';
+import type { Prisma } from '../../generated/prisma/client';
 
 // Mirrors CHECK "Cycle_length_range" in the baseline migration; the DTO
 // rejects early with a readable message, the CHECK is the backstop.

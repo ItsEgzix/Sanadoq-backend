@@ -1,6 +1,6 @@
-import type { Prisma } from 'generated/prisma/client';
-import { sumMoney, toMoneyString } from 'src/common/utils/money.util';
-import { programEntryMode, type EntryMode } from 'src/programs/program.util';
+import type { Prisma } from '../../generated/prisma/client';
+import { sumMoney, toMoneyString } from '../common/utils/money.util';
+import { programEntryMode, type EntryMode } from '../programs/program.util';
 import type { ContributorDetailRow } from './contributor.constant';
 
 /** A contributor with their enrollments, money as fixed-scale strings. */

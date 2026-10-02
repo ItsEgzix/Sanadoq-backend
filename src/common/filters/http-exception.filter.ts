@@ -10,9 +10,9 @@ import { ConfigService } from '@nestjs/config';
 import type { Request, Response } from 'express';
 import { I18nContext, I18nService } from 'nestjs-i18n';
 import { ZodValidationException } from 'nestjs-zod';
-import { AppException } from 'src/common/exceptions/app.exception';
-import { errorMessage } from 'src/common/utils/error.util';
-import { translateEvent } from 'src/common/utils/translate.util';
+import { AppException } from '../exceptions/app.exception';
+import { errorMessage } from '../utils/error.util';
+import { translateEvent } from '../utils/translate.util';
 
 interface DescribedError {
   status: number;

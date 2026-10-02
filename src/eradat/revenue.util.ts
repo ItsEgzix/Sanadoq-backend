@@ -1,7 +1,7 @@
-import type { Prisma } from 'generated/prisma/client';
-import { sumMoney, toMoneyString, ZERO } from 'src/common/utils/money.util';
-import type { PaymentCellRow } from 'src/payments/payment.constant';
-import { toPaymentCellView } from 'src/payments/payment.util';
+import type { Prisma } from '../../generated/prisma/client';
+import { sumMoney, toMoneyString, ZERO } from '../common/utils/money.util';
+import type { PaymentCellRow } from '../payments/payment.constant';
+import { toPaymentCellView } from '../payments/payment.util';
 
 /**
  * The books' arithmetic, as pure functions, always for one program at a

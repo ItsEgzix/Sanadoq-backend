@@ -5,7 +5,7 @@ import {
   type NestInterceptor,
 } from '@nestjs/common';
 import { catchError, from, mergeMap, type Observable } from 'rxjs';
-import type { AuthenticatedRequest } from 'src/common/decorators/current-user.decorator';
+import type { AuthenticatedRequest } from '../common/decorators/current-user.decorator';
 
 /**
  * The second half of AuthGuard's deferred check on reads: the handler has run

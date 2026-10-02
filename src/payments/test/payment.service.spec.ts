@@ -1,10 +1,10 @@
 import { HttpStatus } from '@nestjs/common';
-import { Prisma } from 'generated/prisma/client';
-import { AppException } from 'src/common/exceptions/app.exception';
-import { CycleService } from 'src/cycles/cycle.service';
-import type { EnrollmentService } from 'src/enrollments/enrollment.service';
-import type { ProgramService } from 'src/programs/program.service';
-import type { PrismaService } from 'src/prisma/prisma.service';
+import { Prisma } from '../../../generated/prisma/client';
+import { AppException } from '../../common/exceptions/app.exception';
+import { CycleService } from '../../cycles/cycle.service';
+import type { EnrollmentService } from '../../enrollments/enrollment.service';
+import type { ProgramService } from '../../programs/program.service';
+import type { PrismaService } from '../../prisma/prisma.service';
 import { PaymentService } from '../payment.service';
 
 const CYCLE = {

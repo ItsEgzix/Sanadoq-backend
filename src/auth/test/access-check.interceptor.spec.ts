@@ -1,6 +1,6 @@
 import { HttpStatus, type ExecutionContext } from '@nestjs/common';
 import { lastValueFrom, of, throwError, type Observable } from 'rxjs';
-import { AppException } from 'src/common/exceptions/app.exception';
+import { AppException } from '../../common/exceptions/app.exception';
 import { AccessCheckInterceptor } from '../access-check.interceptor';
 
 function contextWith(pendingAccessCheck?: Promise<Error | null>) {

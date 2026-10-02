@@ -1,5 +1,5 @@
 import { createZodDto } from 'nestjs-zod';
-import { emailSchema, newPasswordSchema } from 'src/auth/auth.schema';
+import { emailSchema, newPasswordSchema } from '../../auth/auth.schema';
 import { z } from 'zod';
 
 // No role field: there is one role today, and every account gets it through

@@ -1,4 +1,4 @@
-import { toMoneyString } from 'src/common/utils/money.util';
+import { toMoneyString } from '../common/utils/money.util';
 import type { EnrollmentRow } from './enrollment.constant';
 
 /** An enrollment as the API returns it: money as fixed-scale strings. */

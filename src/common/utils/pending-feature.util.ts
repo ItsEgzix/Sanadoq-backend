@@ -1,5 +1,5 @@
 import { HttpStatus } from '@nestjs/common';
-import { AppException } from 'src/common/exceptions/app.exception';
+import { AppException } from '../exceptions/app.exception';
 
 /**
  * The failure for a flow whose rules the fund has not confirmed yet (advance

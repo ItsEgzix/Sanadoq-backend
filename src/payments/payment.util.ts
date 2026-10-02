@@ -1,6 +1,6 @@
-import type { Prisma } from 'generated/prisma/client';
-import { toIsoDate } from 'src/common/schemas/date.schema';
-import { toMoneyString } from 'src/common/utils/money.util';
+import type { Prisma } from '../../generated/prisma/client';
+import { toIsoDate } from '../common/schemas/date.schema';
+import { toMoneyString } from '../common/utils/money.util';
 import type { PaymentCellRow, PaymentEntryRow } from './payment.constant';
 import type { CellPayer, PaymentPayer } from './payment.types';
 

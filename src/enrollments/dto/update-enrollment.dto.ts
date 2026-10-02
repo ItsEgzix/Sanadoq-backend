@@ -1,5 +1,5 @@
 import { createZodDto } from 'nestjs-zod';
-import { moneySchema } from 'src/common/schemas/money.schema';
+import { moneySchema } from '../../common/schemas/money.schema';
 import { z } from 'zod';
 
 // Editing expectedRate here is a correction — the new value applies to every

@@ -1,10 +1,10 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import type { Prisma } from 'generated/prisma/client';
-import { AppException } from 'src/common/exceptions/app.exception';
-import { assertNoBlockers } from 'src/common/utils/blockers.util';
-import { isUniqueViolation } from 'src/common/utils/prisma-error.util';
-import { PROGRAM_CAP, PROGRAM_ORDER_BY } from 'src/programs/program.constant';
-import { PrismaService } from 'src/prisma/prisma.service';
+import type { Prisma } from '../../generated/prisma/client';
+import { AppException } from '../common/exceptions/app.exception';
+import { assertNoBlockers } from '../common/utils/blockers.util';
+import { isUniqueViolation } from '../common/utils/prisma-error.util';
+import { PROGRAM_CAP, PROGRAM_ORDER_BY } from '../programs/program.constant';
+import { PrismaService } from '../prisma/prisma.service';
 import type { CreateContributorDto } from './dto/create-contributor.dto';
 import {
   IN_NO_PROGRAM,

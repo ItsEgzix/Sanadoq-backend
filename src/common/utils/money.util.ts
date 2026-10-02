@@ -1,4 +1,4 @@
-import { Prisma } from 'generated/prisma/client';
+import { Prisma } from '../../../generated/prisma/client';
 
 /**
  * Money and ratio formatting — the single place amounts are rounded for the

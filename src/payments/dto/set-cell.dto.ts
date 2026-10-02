@@ -1,5 +1,5 @@
 import { createZodDto } from 'nestjs-zod';
-import { positiveMoneySchema } from 'src/common/schemas/money.schema';
+import { positiveMoneySchema } from '../../common/schemas/money.schema';
 import { z } from 'zod';
 
 // A cell is either money received that month, or ★ — paid, but recorded under

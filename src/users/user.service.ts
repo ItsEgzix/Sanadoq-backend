@@ -1,8 +1,8 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import { hashPassword } from 'src/auth/password.util';
-import { AppException } from 'src/common/exceptions/app.exception';
-import { isUniqueViolation } from 'src/common/utils/prisma-error.util';
-import { PrismaService } from 'src/prisma/prisma.service';
+import { hashPassword } from '../auth/password.util';
+import { AppException } from '../common/exceptions/app.exception';
+import { isUniqueViolation } from '../common/utils/prisma-error.util';
+import { PrismaService } from '../prisma/prisma.service';
 import type { CreateUserDto } from './dto/create-user.dto';
 import type { ResetPasswordDto } from './dto/reset-password.dto';
 import type { UpdateUserDto } from './dto/update-user.dto';

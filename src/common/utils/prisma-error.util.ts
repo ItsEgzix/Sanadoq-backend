@@ -1,4 +1,4 @@
-import { Prisma } from 'generated/prisma/client';
+import { Prisma } from '../../../generated/prisma/client';
 
 /**
  * True when a write lost to a unique constraint. Services dedupe by letting

@@ -6,8 +6,8 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaPg } from '@prisma/adapter-pg';
-import { PrismaClient } from 'generated/prisma/client';
-import { errorMessage } from 'src/common/utils/error.util';
+import { PrismaClient } from '../../generated/prisma/client';
+import { errorMessage } from '../common/utils/error.util';
 import { softDeleteExtension } from './soft-delete.extension';
 
 // Pool settings for a database across the internet (Neon), where opening a

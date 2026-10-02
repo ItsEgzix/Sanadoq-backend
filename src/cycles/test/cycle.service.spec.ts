@@ -1,5 +1,5 @@
-import type { ProgramService } from 'src/programs/program.service';
-import type { PrismaService } from 'src/prisma/prisma.service';
+import type { ProgramService } from '../../programs/program.service';
+import type { PrismaService } from '../../prisma/prisma.service';
 import { CycleService } from '../cycle.service';
 
 const mockPrisma = {

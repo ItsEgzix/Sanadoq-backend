@@ -1,5 +1,5 @@
-import { Prisma } from 'generated/prisma/client';
-import type { PrismaService } from 'src/prisma/prisma.service';
+import { Prisma } from '../../../generated/prisma/client';
+import type { PrismaService } from '../../prisma/prisma.service';
 import type { ContributorDuplicateService } from '../contributor-duplicate.service';
 import { ContributorService } from '../contributor.service';
 
