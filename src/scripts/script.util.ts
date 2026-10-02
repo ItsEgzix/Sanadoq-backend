@@ -1,5 +1,7 @@
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from 'generated/prisma/client';
+import { findDuplicatePairs } from 'src/contributors/contributor-duplicate.util';
+import { CONTRIBUTOR_SCAN_CAP } from 'src/contributors/contributor.constant';
 
 /**
  * Shared by the one-off scripts: open a client on DATABASE_URL (and
@@ -67,6 +69,62 @@ export async function matchContributorsByAccount(
     }
   }
   return { ids, missing, conflicts };
+}
+
+/**
+ * Raises OPEN duplicate flags among every live contributor, by the same rules
+ * as the app's scan — and like the scan it only proposes; nothing is merged.
+ * A dry run also counts the contributors the script would add (`planned`), so
+ * the preview lists the same pairs --apply raises. A dismissed pair is never
+ * raised again: the flag's unique pair key makes the insert skip it.
+ */
+export async function raiseDuplicateFlags(
+  prisma: PrismaClient,
+  {
+    apply,
+    planned,
+  }: { apply: boolean; planned: readonly PlannedContributor[] },
+): Promise<void> {
+  const existing = await prisma.contributor.findMany({
+    where: { isDeleted: false },
+    orderBy: { id: 'asc' },
+    take: CONTRIBUTOR_SCAN_CAP + 1,
+    select: { id: true, name: true, accountNumber: true },
+  });
+  if (existing.length > CONTRIBUTOR_SCAN_CAP) {
+    throw new Error(
+      `More than ${CONTRIBUTOR_SCAN_CAP} contributors; run the duplicate scan from the app instead.`,
+    );
+  }
+  const contributors = apply
+    ? existing
+    : [
+        ...existing,
+        ...planned.map((p) => ({
+          id: `planned:${p.key}`,
+          name: p.name,
+          accountNumber: p.accountNumber,
+        })),
+      ];
+  const byId = new Map(contributors.map((c) => [c.id, c]));
+  const pairs = findDuplicatePairs(contributors);
+  console.log(
+    `Possible duplicates: ${pairs.length} pairs, raised for review in the app — none merged`,
+  );
+  for (const pair of pairs) {
+    const a = byId.get(pair.contributorAId);
+    const b = byId.get(pair.contributorBId);
+    console.log(
+      `  ${a?.accountNumber} ${a?.name}  ~  ${b?.accountNumber} ${b?.name}  [${pair.reasons.join(', ')}]`,
+    );
+  }
+  if (apply && pairs.length > 0) {
+    const { count } = await prisma.contributorDuplicateFlag.createMany({
+      data: pairs,
+      skipDuplicates: true,
+    });
+    console.log(`  raised ${count} new flags`);
+  }
 }
 
 /** Host, database and schema — never credentials. */

@@ -14,6 +14,7 @@ npm install
 npm run db:migrate             # prisma migrate deploy — migrations are hand-written SQL
 npm run db:generate
 npm run create:user -- --email you@example.org --name "Your Name" --apply   # first account; prints a one-time password
+npm run seed:contributors -- --file "../CHARITY FUND 2026-2029 (1).xlsx" --apply   # the real contributors from the workbook; omit --apply for a dry run
 npm run seed:demo -- --apply   # optional demo data; omit --apply for a dry run
 npm run start:dev              # http://localhost:5050
 ```
@@ -57,21 +58,21 @@ top of `src/prisma/prisma.service.ts`. Keep both in mind when adding a read.
 
 ## Layout
 
-| Path                | Owns                                                                                                   |
-| ------------------- | ------------------------------------------------------------------------------------------------------ |
-| `src/auth/`         | Login, refresh, logout, password change; `AuthGuard`; permissions (`auth.constant.ts`)                 |
-| `src/users/`        | The account list: create, switch on/off, reset another's password                                      |
-| `src/programs/`     | Programs; protection rules for the fund's membership program; entry mode (`program.util.ts`)           |
-| `src/cycles/`       | Each program's own cycles; `resolveWindow` — which years a program's books open on and accept          |
-| `src/contributors/` | Contributors directory; the duplicate review queue — matching rules in `contributor-duplicate.util.ts` |
-| `src/enrollments/`  | Who is in which program, with that program's pledge and previous subscription                          |
-| `src/payments/`     | Monthly cells (amount / ★ / clear) and dated ledger entries                                            |
-| `src/eradat/`       | Read side: per-program summary, grid lines, transfer lines, ledger; formulas in `revenue.util.ts`      |
-| `src/common/`       | `AppException`, global filter/interceptor, env schema, access decorators, money/date schemas           |
-| `src/prisma/`       | `PrismaService` (soft-delete filtered) + extension                                                     |
-| `src/scripts/`      | `create:user`, `seed:demo`, `migrate:legacy-eradat` — all dry-run unless `--apply`                     |
-| `src/i18n/{en,ar}/` | Every success/error message, in English and Arabic                                                     |
-| `prisma/`           | `schema.prisma` (layout map at the top) and the hand-written SQL migrations                            |
+| Path                | Owns                                                                                                    |
+| ------------------- | ------------------------------------------------------------------------------------------------------- |
+| `src/auth/`         | Login, refresh, logout, password change; `AuthGuard`; permissions (`auth.constant.ts`)                  |
+| `src/users/`        | The account list: create, switch on/off, reset another's password                                       |
+| `src/programs/`     | Programs; protection rules for the fund's membership program; entry mode (`program.util.ts`)            |
+| `src/cycles/`       | Each program's own cycles; `resolveWindow` — which years a program's books open on and accept           |
+| `src/contributors/` | Contributors directory; the duplicate review queue — matching rules in `contributor-duplicate.util.ts`  |
+| `src/enrollments/`  | Who is in which program, with that program's pledge and previous subscription                           |
+| `src/payments/`     | Monthly cells (amount / ★ / clear) and dated ledger entries                                             |
+| `src/eradat/`       | Read side: per-program summary, grid lines, transfer lines, ledger; formulas in `revenue.util.ts`       |
+| `src/common/`       | `AppException`, global filter/interceptor, env schema, access decorators, money/date schemas            |
+| `src/prisma/`       | `PrismaService` (soft-delete filtered) + extension                                                      |
+| `src/scripts/`      | `create:user`, `seed:contributors`, `seed:demo`, `migrate:legacy-eradat` — all dry-run unless `--apply` |
+| `src/i18n/{en,ar}/` | Every success/error message, in English and Arabic                                                      |
+| `prisma/`           | `schema.prisma` (layout map at the top) and the hand-written SQL migrations                             |
 
 ## How the books work
 
@@ -93,6 +94,9 @@ top of `src/prisma/prisma.service.ts`. Keep both in mind when adding a read.
   `POST /contributors/duplicates/scan`, raise review flags; a reviewer merges or
   dismisses each one. Merging moves the other record's enrollments (and, by
   the FK's `ON UPDATE CASCADE`, its payments) and retires its account number.
+  The one exception is `seed:contributors`, asked to fold the workbook's
+  cross-sheet repeats (same first two names, same serial) before inserting,
+  keeping the oldest account number.
 
 ## API
 

@@ -81,7 +81,9 @@ class ScanTooLargeError extends AppException {
  * (contributor-duplicate.util.ts) and stores them as OPEN flags; a reviewer
  * then confirms (merge) or rejects (dismiss) each one. Nothing merges on a
  * match. Migrations and imports create one Contributor per source row and leave
- * the identity question to this queue.
+ * the identity question to this queue — except seed:contributors, which was
+ * asked to fold the workbook's cross-sheet pairs (same first two names, same
+ * serial) itself; see src/scripts/seed-contributors.ts.
  *
  * Exported for ContributorService, which checks each new or renamed contributor
  * against everyone else as it is saved.
