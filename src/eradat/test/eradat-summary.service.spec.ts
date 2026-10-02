@@ -228,6 +228,8 @@ describe('EradatSummaryService', () => {
     });
     expect(summary.collection.ratio).toBeNull();
     expect(summary.months[2].total).toBe('5250.00'); // March, folded from dates
+    // Both are gifts, though neither payer is an enrolled contributor.
+    expect(summary.months[2]).toMatchObject({ paidCount: 0, entryCount: 2 });
   });
 
   it('reports stars per month without adding them to any total', async () => {
@@ -264,8 +266,13 @@ describe('EradatSummaryService', () => {
     expect(summary.months[2]).toMatchObject({
       fromEnrolled: '1200.00',
       paidCount: 1,
+      entryCount: 1,
     });
-    expect(summary.months[3]).toMatchObject({ total: '0.00', starredCount: 2 });
+    expect(summary.months[3]).toMatchObject({
+      total: '0.00',
+      starredCount: 2,
+      entryCount: 0,
+    });
     expect(summary.running.enrolledRunningTotal).toBe('6200.00'); // 5000 previous + 1200
   });
 });

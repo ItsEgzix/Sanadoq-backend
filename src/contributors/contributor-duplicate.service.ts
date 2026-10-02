@@ -61,7 +61,7 @@ function toFlagView(flag: FlagRow) {
 // Each statement of a merge runs on the transaction client.
 type MergeClient = Pick<
   PrismaService,
-  'contributor' | 'programEnrollment' | 'contributorDuplicateFlag'
+  'contributor' | 'programEnrollment' | 'payment' | 'contributorDuplicateFlag'
 >;
 
 const FLAG_INSERT_BATCH = 500;
@@ -182,10 +182,12 @@ export class ContributorDuplicateService {
    * the other record (and, through the composite FK's ON UPDATE CASCADE,
    * every payment under it) onto the kept record, then retires the other.
    *
-   * Refused when both records are enrolled in the same program: their
-   * pledges, previous subscriptions and possibly the same months would
+   * Refused when both records are enrolled in the same periodic program:
+   * their pledges, previous subscriptions and possibly the same months would
    * collide, and which figures are right is a call for a reviewer to make —
-   * by removing or correcting one enrollment first.
+   * by removing or correcting one enrollment first. Both having given to the
+   * same temporary program is no conflict: donor rows carry no figures and
+   * dated gifts never collide, so the gifts move and one row remains.
    */
   async mergeFlag(userId: string, flagId: string, dto: MergeDuplicateDto) {
     // One transaction: claiming the flag, retiring one record and moving its
@@ -269,19 +271,43 @@ export class ContributorDuplicateService {
     });
     const dropEnrollments = await tx.programEnrollment.findMany({
       where: { contributorId: dropContributorId },
-      select: { programId: true, program: { select: { name: true } } },
+      select: {
+        programId: true,
+        program: { select: { name: true, type: true } },
+      },
     });
     const keepPrograms = new Set(keepEnrollments.map((e) => e.programId));
+    const shared = dropEnrollments.filter((e) => keepPrograms.has(e.programId));
     assertNoBlockers(
       'CONTRIBUTOR_MERGE_CONFLICT',
-      dropEnrollments
-        .filter((e) => keepPrograms.has(e.programId))
+      shared
+        .filter((e) => e.program.type === 'PERIODIC')
         .map((e) => ({
           kind: 'PROGRAM' as const,
           id: e.programId,
           name: e.program.name,
         })),
     );
+
+    // Programs both gave to: the gifts move onto the kept donor row (the
+    // composite FK finds it already there), then the emptied row goes. The
+    // updateMany below would otherwise hit the (contributor, program) key.
+    const sharedDonations = shared.map((e) => e.programId);
+    if (sharedDonations.length > 0) {
+      await tx.payment.updateMany({
+        where: {
+          contributorId: dropContributorId,
+          programId: { in: sharedDonations },
+        },
+        data: { contributorId: keepContributorId },
+      });
+      await tx.programEnrollment.deleteMany({
+        where: {
+          contributorId: dropContributorId,
+          programId: { in: sharedDonations },
+        },
+      });
+    }
 
     // ON UPDATE CASCADE on Payment's (contributorId, programId) FK re-points
     // every payment of each moved enrollment in this same statement.
@@ -322,7 +348,7 @@ export class ContributorDuplicateService {
     return {
       keptContributorId: keepContributorId,
       mergedContributorId: dropContributorId,
-      movedEnrollments: moved.count,
+      movedEnrollments: moved.count + sharedDonations.length,
     };
   }
 

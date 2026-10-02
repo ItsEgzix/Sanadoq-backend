@@ -37,6 +37,7 @@
   "PROGRAM_PROTECTED": "The fund's membership program is protected and can never be removed.",
   "PROGRAM_PROTECTED_SHAPE": "The fund's membership program is protected: its type and cycle setting cannot change.",
   "PROGRAM_SHAPE_LOCKED": "The type and cycle setting can only change before a program has payments or cycles. This one has {payments} payments and {cycles} cycles.",
+  "PROGRAM_TYPE_LOCKED": "A program can only switch between periodic and temporary while no one is enrolled in it: temporary programs keep no pledges. This one has {enrollments} enrollments.",
   "PROGRAM_LIMIT_REACHED": "There are already {limit} programs. Remove one before adding another.",
   "PROGRAM_HAS_NO_CYCLES": "{name} runs without cycles. Turn cycles on for it first.",
   "PROGRAM_NOT_MONTHLY": "{name} keeps a dated ledger, not a monthly grid. Record a dated payment instead.",
@@ -76,6 +77,7 @@
   "ENROLLMENT_EXISTS": "This contributor is already enrolled in {programName}.",
   "ENROLLMENT_ALREADY_DORMANT": "This enrollment is already dormant.",
   "ENROLLMENT_HAS_PAYMENTS": "This contributor has {count} payments in this program, so the enrollment cannot be removed. Mark it dormant instead.",
+  "ENROLLMENT_PROGRAM_TEMPORARY": "{programName} is a temporary program: people give to it without enrolling, and it keeps no pledge or previous subscription. Record their payment instead.",
 
   "PAYMENT_CELL_SAVE_SUCCESS": "Saved.",
   "PAYMENT_CELL_CLEAR_SUCCESS": "Cell cleared.",

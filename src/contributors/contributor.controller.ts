@@ -26,6 +26,13 @@ export class ContributorController {
     return this.contributorService.listContributors(query);
   }
 
+  // Ahead of ':contributorId' on purpose: Nest matches in declaration order,
+  // and "stats" would otherwise be read as a contributor id.
+  @Get('stats')
+  async stats() {
+    return this.contributorService.getDirectoryStats();
+  }
+
   @Get(':contributorId')
   async get(@Param('contributorId') contributorId: string) {
     return this.contributorService.getContributor(contributorId);

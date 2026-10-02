@@ -35,6 +35,7 @@ const DATED_PROGRAM = {
 };
 
 const mockPrisma = {
+  $transaction: jest.fn(),
   payment: {
     upsert: jest.fn(),
     deleteMany: jest.fn(),
@@ -45,7 +46,11 @@ const mockPrisma = {
   program: { findFirst: jest.fn() },
 };
 const mockProgramService = { assertProgramExists: jest.fn() };
-const mockEnrollmentService = { assertEnrolled: jest.fn() };
+const mockEnrollmentService = {
+  lookUpContributorPayer: jest.fn(),
+  addDonor: jest.fn(),
+  removeDonorIfEmpty: jest.fn(),
+};
 
 const CONTRIBUTOR = { kind: 'CONTRIBUTOR' as const, contributorId: 'p1' };
 const FROM_FUND = { kind: 'PROGRAM' as const, programId: 'fund' };
@@ -73,7 +78,13 @@ describe('PaymentService', () => {
     mockProgramService.assertProgramExists.mockImplementation((id: string) =>
       Promise.resolve(id === 'camp' ? DATED_PROGRAM : MONTHLY_PROGRAM),
     );
-    mockEnrollmentService.assertEnrolled.mockResolvedValue({ id: 'e1' });
+    mockEnrollmentService.lookUpContributorPayer.mockResolvedValue({
+      enrolled: true,
+      live: true,
+    });
+    mockPrisma.$transaction.mockImplementation(
+      (fn: (tx: typeof mockPrisma) => unknown) => fn(mockPrisma),
+    );
     mockPrisma.program.findFirst.mockResolvedValue({ id: 'fund' });
     // The real CycleService, so the window and year fence under test are the shipped ones.
     const cycleService = new CycleService(
@@ -181,7 +192,9 @@ describe('PaymentService', () => {
         },
       });
       expect(call.create).not.toHaveProperty('contributorId');
-      expect(mockEnrollmentService.assertEnrolled).not.toHaveBeenCalled();
+      expect(
+        mockEnrollmentService.lookUpContributorPayer,
+      ).not.toHaveBeenCalled();
     });
 
     it('refuses a program paying itself', async () => {
@@ -211,9 +224,10 @@ describe('PaymentService', () => {
     });
 
     it('refuses a contributor not enrolled in the program before writing anything', async () => {
-      mockEnrollmentService.assertEnrolled.mockRejectedValue(
-        new AppException('ENROLLMENT_NOT_FOUND', {}, HttpStatus.NOT_FOUND),
-      );
+      mockEnrollmentService.lookUpContributorPayer.mockResolvedValue({
+        enrolled: false,
+        live: true,
+      });
       await expect(
         service.setCell(
           'u1',
@@ -257,9 +271,10 @@ describe('PaymentService', () => {
       mockProgramService.assertProgramExists.mockRejectedValue(
         new AppException('PROGRAM_NOT_FOUND', {}, HttpStatus.NOT_FOUND),
       );
-      mockEnrollmentService.assertEnrolled.mockRejectedValue(
-        new AppException('ENROLLMENT_NOT_FOUND', {}, HttpStatus.NOT_FOUND),
-      );
+      mockEnrollmentService.lookUpContributorPayer.mockResolvedValue({
+        enrolled: false,
+        live: true,
+      });
       await expect(
         service.setCell(
           'u1',
@@ -273,9 +288,10 @@ describe('PaymentService', () => {
     });
 
     it('answers the cycle fence before a payer failure', async () => {
-      mockEnrollmentService.assertEnrolled.mockRejectedValue(
-        new AppException('ENROLLMENT_NOT_FOUND', {}, HttpStatus.NOT_FOUND),
-      );
+      mockEnrollmentService.lookUpContributorPayer.mockResolvedValue({
+        enrolled: false,
+        live: true,
+      });
       await expect(
         service.setCell(
           'u1',
@@ -375,6 +391,79 @@ describe('PaymentService', () => {
       ).rejects.toMatchObject({ errorCode: 'PAYMENT_IDEMPOTENCY_KEY_REUSED' });
     });
 
+    const GIFT = {
+      payer: CONTRIBUTOR,
+      amount: '500',
+      paymentDate: new Date('2026-03-01T00:00:00.000Z'),
+    };
+
+    it('takes a directory contributor’s first gift to a temporary program with no enrolling, adding their donor row in the same transaction', async () => {
+      mockEnrollmentService.lookUpContributorPayer.mockResolvedValue({
+        enrolled: false,
+        live: true,
+      });
+      mockPrisma.payment.create.mockResolvedValue(
+        entryRow({ contributorId: 'p1', payerNameFreetext: null }),
+      );
+
+      await service.recordPayment('u1', 'camp', GIFT);
+
+      expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(mockEnrollmentService.addDonor).toHaveBeenCalledWith(
+        mockPrisma,
+        'camp',
+        'p1',
+      );
+      expect(
+        mockEnrollmentService.addDonor.mock.invocationCallOrder[0],
+      ).toBeLessThan(mockPrisma.payment.create.mock.invocationCallOrder[0]);
+    });
+
+    it('books a returning donor’s gift as the single insert', async () => {
+      mockPrisma.payment.create.mockResolvedValue(
+        entryRow({ contributorId: 'p1', payerNameFreetext: null }),
+      );
+
+      await service.recordPayment('u1', 'camp', GIFT);
+
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+      expect(mockEnrollmentService.addDonor).not.toHaveBeenCalled();
+      expect(mockPrisma.payment.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses a deleted or merged-away contributor giving to a temporary program', async () => {
+      mockEnrollmentService.lookUpContributorPayer.mockResolvedValue({
+        enrolled: false,
+        live: false,
+      });
+
+      await expect(
+        service.recordPayment('u1', 'camp', GIFT),
+      ).rejects.toMatchObject({ errorCode: 'CONTRIBUTOR_NOT_FOUND' });
+      expect(mockEnrollmentService.addDonor).not.toHaveBeenCalled();
+      expect(mockPrisma.payment.create).not.toHaveBeenCalled();
+    });
+
+    // A periodic program without cycles keeps a ledger too, but it has
+    // subscribers: only the enrolled pay it.
+    it('still requires enrollment in a periodic program that keeps a ledger', async () => {
+      mockProgramService.assertProgramExists.mockResolvedValue({
+        ...DATED_PROGRAM,
+        id: 'jamea',
+        type: 'PERIODIC',
+      });
+      mockEnrollmentService.lookUpContributorPayer.mockResolvedValue({
+        enrolled: false,
+        live: true,
+      });
+
+      await expect(
+        service.recordPayment('u1', 'jamea', GIFT),
+      ).rejects.toMatchObject({ errorCode: 'ENROLLMENT_NOT_FOUND' });
+      expect(mockEnrollmentService.addDonor).not.toHaveBeenCalled();
+      expect(mockPrisma.payment.create).not.toHaveBeenCalled();
+    });
+
     it('refuses a dated entry on a program that keeps a monthly grid', async () => {
       await expect(
         service.recordPayment('u1', 'fund', {
@@ -433,6 +522,43 @@ describe('PaymentService', () => {
       expect(mockPrisma.payment.deleteMany).toHaveBeenCalledWith({
         where: { id: 'pay-1', programId: 'drive' },
       });
+    });
+
+    it('drops the donor row with the last gift of theirs removed from a temporary program', async () => {
+      mockPrisma.payment.findFirst.mockResolvedValue({
+        year: 2026,
+        contributorId: 'p1',
+      });
+      mockPrisma.payment.deleteMany.mockResolvedValue({ count: 1 });
+
+      await service.deletePayment('camp', 'pay-1');
+
+      expect(mockEnrollmentService.removeDonorIfEmpty).toHaveBeenCalledWith(
+        'camp',
+        'p1',
+      );
+      expect(
+        mockPrisma.payment.deleteMany.mock.invocationCallOrder[0],
+      ).toBeLessThan(
+        mockEnrollmentService.removeDonorIfEmpty.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('never touches an enrollment when removing a periodic program’s entry', async () => {
+      mockProgramService.assertProgramExists.mockResolvedValue({
+        ...DATED_PROGRAM,
+        id: 'jamea',
+        type: 'PERIODIC',
+      });
+      mockPrisma.payment.findFirst.mockResolvedValue({
+        year: 2026,
+        contributorId: 'p1',
+      });
+      mockPrisma.payment.deleteMany.mockResolvedValue({ count: 1 });
+
+      await service.deletePayment('jamea', 'pay-1');
+
+      expect(mockEnrollmentService.removeDonorIfEmpty).not.toHaveBeenCalled();
     });
 
     it('answers PAYMENT_NOT_FOUND first for an entry in a program that does not exist', async () => {

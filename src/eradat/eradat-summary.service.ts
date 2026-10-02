@@ -30,6 +30,9 @@ interface MonthTotals extends KindTotals {
   // Unstarred payments by enrolled contributors that month, and stars.
   paidCount: number;
   starredCount: number;
+  // Unstarred payments of every payer kind — a temporary program's gifts,
+  // where paidCount alone would miss the one-off donors.
+  entryCount: number;
 }
 
 const emptyKindTotals = (): KindTotals => ({
@@ -117,6 +120,7 @@ export class EradatSummaryService {
         ...toKindView(month),
         paidCount: month.paidCount,
         starredCount: month.starredCount,
+        entryCount: month.entryCount,
       })),
       yearTotals: years.map((windowYear, index) => ({
         year: windowYear,
@@ -175,6 +179,7 @@ export class EradatSummaryService {
       ...emptyKindTotals(),
       paidCount: 0,
       starredCount: 0,
+      entryCount: 0,
     }));
 
     if (mode === 'MONTHLY') {
@@ -189,6 +194,7 @@ export class EradatSummaryService {
           by: ['month'],
           where: { programId, year, ...PAYER_KINDS.programs },
           _sum: { amount: true },
+          _count: { _all: true },
         }),
       ]);
       for (const row of enrolled) {
@@ -198,11 +204,14 @@ export class EradatSummaryService {
         else {
           month.enrolled = row._sum.amount ?? ZERO;
           month.paidCount = row._count._all;
+          month.entryCount += row._count._all;
         }
       }
       for (const row of programs) {
         if (row.month !== null) {
-          months[row.month - 1].programs = row._sum.amount ?? ZERO;
+          const month = months[row.month - 1];
+          month.programs = row._sum.amount ?? ZERO;
+          month.entryCount += row._count._all;
         }
       }
       return months;
@@ -220,6 +229,7 @@ export class EradatSummaryService {
           if (!row.paymentDate) continue;
           const month = months[row.paymentDate.getUTCMonth()];
           month[kind] = month[kind].plus(row._sum.amount ?? ZERO);
+          month.entryCount += row._count._all;
           if (kind === 'enrolled') month.paidCount += row._count._all;
         }
       }),

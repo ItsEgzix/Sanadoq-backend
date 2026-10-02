@@ -14,7 +14,10 @@ const mockPrisma = {
     update: jest.fn(),
     updateMany: jest.fn(),
     delete: jest.fn(),
+    createMany: jest.fn(),
+    deleteMany: jest.fn(),
   },
+  contributor: { findFirst: jest.fn() },
   payment: { count: jest.fn() },
 };
 const mockProgramService = { assertProgramExists: jest.fn() };
@@ -41,6 +44,9 @@ const ENROLLMENT = {
   contributor: CONTRIBUTOR,
 };
 
+const FUND = { id: 'fund', name: 'اشتراكات الصندوق', type: 'PERIODIC' };
+const CAMPAIGN = { id: 'camp', name: 'حملة رمضان', type: 'TEMPORARY' };
+
 const prismaError = (code: string) =>
   new Prisma.PrismaClientKnownRequestError('db', {
     code,
@@ -55,10 +61,9 @@ describe('EnrollmentService', () => {
     mockPrisma.$transaction.mockImplementation(
       (fn: (tx: typeof mockPrisma) => unknown) => fn(mockPrisma),
     );
-    mockProgramService.assertProgramExists.mockResolvedValue({
-      id: 'fund',
-      name: 'اشتراكات الصندوق',
-    });
+    mockProgramService.assertProgramExists.mockImplementation((id: string) =>
+      Promise.resolve(id === 'camp' ? CAMPAIGN : FUND),
+    );
     mockPrisma.programEnrollment.findFirst.mockResolvedValue(ENROLLMENT);
     service = new EnrollmentService(
       mockPrisma as unknown as PrismaService,
@@ -124,6 +129,20 @@ describe('EnrollmentService', () => {
       ).not.toHaveBeenCalled();
     });
 
+    it('refuses to enroll anyone in a temporary program, which takes gifts without enrolling', async () => {
+      await expect(
+        service.createEnrollment('camp', {
+          contributorId: 'p1',
+          expectedRate: '0',
+        }),
+      ).rejects.toMatchObject({
+        errorCode: 'ENROLLMENT_PROGRAM_TEMPORARY',
+        meta: { programName: 'حملة رمضان' },
+      });
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+      expect(mockContributorService.insertContributor).not.toHaveBeenCalled();
+    });
+
     it('answers ENROLLMENT_EXISTS for a second enrollment in the same program', async () => {
       mockPrisma.programEnrollment.create.mockRejectedValue(
         prismaError('P2002'),
@@ -135,6 +154,79 @@ describe('EnrollmentService', () => {
           expectedRate: '1',
         }),
       ).rejects.toMatchObject({ errorCode: 'ENROLLMENT_EXISTS' });
+    });
+  });
+
+  describe('updateEnrollment', () => {
+    it('refuses a pledge or previous subscription on a temporary program’s donor row', async () => {
+      await expect(
+        service.updateEnrollment('camp', 'e1', { expectedRate: '1200' }),
+      ).rejects.toMatchObject({ errorCode: 'ENROLLMENT_PROGRAM_TEMPORARY' });
+      expect(mockPrisma.programEnrollment.update).not.toHaveBeenCalled();
+    });
+
+    it('corrects a periodic enrollment’s pledge', async () => {
+      mockPrisma.programEnrollment.update.mockResolvedValue({
+        ...ENROLLMENT,
+        expectedRate: new Prisma.Decimal(7200),
+      });
+
+      const result = await service.updateEnrollment('fund', 'e1', {
+        expectedRate: '7200',
+      });
+
+      expect(result).toMatchObject({
+        expectedRate: '7200.00',
+        successCode: 'ENROLLMENT_UPDATE_SUCCESS',
+      });
+    });
+  });
+
+  describe('donor rows', () => {
+    it('reads enrollment and a live record side by side, before the program type is known', async () => {
+      mockPrisma.programEnrollment.findUnique.mockResolvedValue(null);
+      mockPrisma.contributor.findFirst.mockResolvedValue({ id: 'p1' });
+
+      await expect(
+        service.lookUpContributorPayer('camp', 'p1'),
+      ).resolves.toEqual({ enrolled: false, live: true });
+    });
+
+    it('adds a pledge-free donor row that a racing first gift cannot duplicate', async () => {
+      await service.addDonor(
+        mockPrisma as unknown as PrismaService,
+        'camp',
+        'p1',
+      );
+
+      expect(mockPrisma.programEnrollment.createMany).toHaveBeenCalledWith({
+        data: [{ programId: 'camp', contributorId: 'p1', expectedRate: '0' }],
+        skipDuplicates: true,
+      });
+    });
+
+    it('removes a donor row only once no payment of theirs is left in the program', async () => {
+      mockPrisma.programEnrollment.deleteMany.mockResolvedValue({ count: 1 });
+
+      await service.removeDonorIfEmpty('camp', 'p1');
+
+      expect(mockPrisma.programEnrollment.deleteMany).toHaveBeenCalledWith({
+        where: {
+          programId: 'camp',
+          contributorId: 'p1',
+          payments: { none: {} },
+        },
+      });
+    });
+
+    it('keeps the donor row when a gift lands between the filter and the delete', async () => {
+      mockPrisma.programEnrollment.deleteMany.mockRejectedValue(
+        prismaError('P2003'),
+      );
+
+      await expect(
+        service.removeDonorIfEmpty('camp', 'p1'),
+      ).resolves.toBeUndefined();
     });
   });
 
@@ -184,9 +276,22 @@ describe('EnrollmentService', () => {
       await service.markEnrollmentDormant('fund', 'e1');
 
       expect(mockPrisma.programEnrollment.updateMany).toHaveBeenCalledWith({
-        where: { id: 'e1', programId: 'fund', status: 'ACTIVE' },
+        where: {
+          id: 'e1',
+          programId: 'fund',
+          status: 'ACTIVE',
+          program: { type: 'PERIODIC' },
+        },
         data: { status: 'DORMANT' },
       });
+    });
+
+    it('never makes a temporary program’s donor dormant', async () => {
+      mockPrisma.programEnrollment.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(
+        service.markEnrollmentDormant('camp', 'e1'),
+      ).rejects.toMatchObject({ errorCode: 'ENROLLMENT_PROGRAM_TEMPORARY' });
     });
 
     it('answers ENROLLMENT_ALREADY_DORMANT to the second of two clicks', async () => {

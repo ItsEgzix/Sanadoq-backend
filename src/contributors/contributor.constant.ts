@@ -43,7 +43,11 @@ export const CONTRIBUTOR_DETAIL_SELECT = {
       status: true,
       expectedRate: true,
       previousSubscription: true,
-      program: { select: { name: true, isProtected: true } },
+      // type and hasCycles decide the entry mode: whether the directory draws
+      // the year as twelve month cells or as a count of dated entries.
+      program: {
+        select: { name: true, isProtected: true, type: true, hasCycles: true },
+      },
     },
   },
 } satisfies Prisma.ContributorSelect;

@@ -3,21 +3,27 @@ import type { Prisma } from 'generated/prisma/client';
 import { AppException } from 'src/common/exceptions/app.exception';
 import { assertNoBlockers } from 'src/common/utils/blockers.util';
 import { isUniqueViolation } from 'src/common/utils/prisma-error.util';
-import { PROGRAM_CAP } from 'src/programs/program.constant';
+import { PROGRAM_CAP, PROGRAM_ORDER_BY } from 'src/programs/program.constant';
 import { PrismaService } from 'src/prisma/prisma.service';
 import type { CreateContributorDto } from './dto/create-contributor.dto';
-import type { ListContributorsQueryDto } from './dto/list-contributors-query.dto';
+import {
+  IN_NO_PROGRAM,
+  type ListContributorsQueryDto,
+} from './dto/list-contributors-query.dto';
 import type { UpdateContributorDto } from './dto/update-contributor.dto';
 import { ContributorDuplicateService } from './contributor-duplicate.service';
 import {
   CONTRIBUTOR_DETAIL_SELECT,
   CONTRIBUTOR_ORDER_BY,
+  CONTRIBUTOR_SCAN_CAP,
   CONTRIBUTOR_SELECT,
   type ContributorRow,
 } from './contributor.constant';
 import {
   toContributorDetailView,
+  toYearActivity,
   type ContributorDetailView,
+  type YearPaymentGroup,
 } from './contributor.util';
 
 const DIGITS_ONLY = /^\d+$/;
@@ -38,10 +44,16 @@ export class ContributorService {
     private readonly duplicates: ContributorDuplicateService,
   ) {}
 
-  async listContributors({ cursor, limit, q }: ListContributorsQueryDto) {
+  async listContributors({
+    cursor,
+    limit,
+    q,
+    program,
+    year,
+  }: ListContributorsQueryDto) {
     // One extra row says whether another page exists without a count().
     const found = await this.prisma.contributor.findMany({
-      where: this.buildSearch(q),
+      where: { AND: [this.buildSearch(q), this.buildProgramFilter(program)] },
       orderBy: CONTRIBUTOR_ORDER_BY,
       take: limit + 1,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
@@ -49,9 +61,77 @@ export class ContributorService {
     });
     const hasMore = found.length > limit;
     const rows = hasMore ? found.slice(0, limit) : found;
+    const items = rows.map(toContributorDetailView);
+    const nextCursor = hasMore ? rows[rows.length - 1].id : null;
+    if (year === undefined) return { items, nextCursor };
     return {
-      items: rows.map(toContributorDetailView),
-      nextCursor: hasMore ? rows[rows.length - 1].id : null,
+      year,
+      items: await this.withYearActivity(items, year),
+      nextCursor,
+    };
+  }
+
+  /**
+   * The directory's header: how many contributors there are, how many sit in
+   * each program, and how many are in none. Counts only — nothing here adds
+   * money across programs. One round trip: every count runs side by side.
+   */
+  async getDirectoryStats() {
+    // Relation filters are not rewritten by the soft-delete extension, so an
+    // enrollment in a deleted program — or of a merged-away contributor — is
+    // excluded here by name.
+    const liveEnrollment = {
+      program: { isDeleted: false },
+      contributor: { isDeleted: false },
+    } satisfies Prisma.ProgramEnrollmentWhereInput;
+
+    const [total, inNoProgram, withContact, severalPrograms, programs, counts] =
+      await Promise.all([
+        this.prisma.contributor.count(),
+        this.prisma.contributor.count({
+          where: { enrollments: { none: { program: { isDeleted: false } } } },
+        }),
+        // Blank phone and email are stored as NULL (see the create DTO), so
+        // NOT NULL means a real value.
+        this.prisma.contributor.count({
+          where: { OR: [{ phone: { not: null } }, { email: { not: null } }] },
+        }),
+        // Prisma cannot count groups, so the groups come back and are
+        // counted here — only contributors in two or more programs, a
+        // handful, bounded by the scan cap regardless.
+        this.prisma.programEnrollment.groupBy({
+          by: ['contributorId'],
+          where: liveEnrollment,
+          having: { contributorId: { _count: { gt: 1 } } },
+          orderBy: { contributorId: 'asc' },
+          take: CONTRIBUTOR_SCAN_CAP,
+        }),
+        this.prisma.program.findMany({
+          orderBy: PROGRAM_ORDER_BY,
+          take: PROGRAM_CAP,
+          select: { id: true, name: true, isProtected: true },
+        }),
+        // At most two groups per program: ACTIVE and DORMANT.
+        this.prisma.programEnrollment.groupBy({
+          by: ['programId', 'status'],
+          where: liveEnrollment,
+          _count: { _all: true },
+        }),
+      ]);
+
+    const countOf = (programId: string, status: 'ACTIVE' | 'DORMANT') =>
+      counts.find((row) => row.programId === programId && row.status === status)
+        ?._count._all ?? 0;
+    return {
+      total,
+      inNoProgram,
+      inSeveralPrograms: severalPrograms.length,
+      withContact,
+      programs: programs.map((p) => ({
+        ...p,
+        enrolled: countOf(p.id, 'ACTIVE') + countOf(p.id, 'DORMANT'),
+        dormant: countOf(p.id, 'DORMANT'),
+      })),
     };
   }
 
@@ -200,6 +280,67 @@ export class ContributorService {
         ...(DIGITS_ONLY.test(q) ? [{ accountNumber: { startsWith: q } }] : []),
       ],
     };
+  }
+
+  // An unknown program id is not an error: it lists no one, the same answer
+  // a deleted program gives.
+  private buildProgramFilter(
+    program: string | undefined,
+  ): Prisma.ContributorWhereInput {
+    if (!program) return {};
+    if (program === IN_NO_PROGRAM) {
+      return { enrollments: { none: { program: { isDeleted: false } } } };
+    }
+    return {
+      enrollments: {
+        some: { programId: program, program: { isDeleted: false } },
+      },
+    };
+  }
+
+  /**
+   * Attaches one year of payments to every enrollment on the page. A second
+   * round trip, so it is skipped when no one on the page is enrolled — today
+   * the common case. The groups are bounded by construction: per enrollment,
+   * at most twelve months (each paid or ★) plus one group of dated entries.
+   */
+  private async withYearActivity(items: ContributorDetailView[], year: number) {
+    const enrolled = items.filter((item) => item.enrollments.length > 0);
+    const groups =
+      enrolled.length === 0
+        ? []
+        : await this.prisma.payment.groupBy({
+            by: ['contributorId', 'programId', 'month', 'isStarred'],
+            where: {
+              contributorId: { in: enrolled.map((item) => item.id) },
+              year,
+            },
+            _sum: { amount: true },
+            _count: { _all: true },
+          });
+
+    const byEnrollment = new Map<string, YearPaymentGroup[]>();
+    for (const group of groups) {
+      const key = `${group.contributorId}:${group.programId}`;
+      const list = byEnrollment.get(key) ?? [];
+      list.push({
+        month: group.month,
+        isStarred: group.isStarred,
+        amount: group._sum.amount,
+        count: group._count._all,
+      });
+      byEnrollment.set(key, list);
+    }
+    return items.map((item) => ({
+      ...item,
+      enrollments: item.enrollments.map((enrollment) => ({
+        ...enrollment,
+        activity: toYearActivity(
+          byEnrollment.get(`${item.id}:${enrollment.programId}`) ?? [],
+          enrollment.entryMode,
+        ),
+      })),
+    }));
   }
 
   // The unique index on accountNumber is the dedupe — it also spans deleted

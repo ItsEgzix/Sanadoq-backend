@@ -8,6 +8,7 @@ import {
 } from 'src/common/utils/prisma-error.util';
 import { CONTRIBUTOR_SELECT } from 'src/contributors/contributor.constant';
 import { ContributorService } from 'src/contributors/contributor.service';
+import type { ProgramRow } from 'src/programs/program.constant';
 import { ProgramService } from 'src/programs/program.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import type { CreateEnrollmentDto } from './dto/create-enrollment.dto';
@@ -29,8 +30,13 @@ const DIGITS_ONLY = /^\d+$/;
  * same contributor can pledge different amounts to different programs, which is
  * why the rate lives here and not on Contributor.
  *
- * Exported for PaymentModule (a contributor can only pay a program they are
- * enrolled in — also a database fact, via Payment's composite FK) and
+ * Only a PERIODIC program is enrolled in. A TEMPORARY one takes gifts from
+ * anyone with no enrolling and keeps no pledge or previous subscription; its
+ * rows are donor rows, added by a contributor's first gift and removed with
+ * their last (addDonor, removeDonorIfEmpty), because Payment's composite FK
+ * still needs one under every contributor payment.
+ *
+ * Exported for PaymentModule (who may pay, and the donor rows) and
  * EradatModule (the grid pages through enrollments).
  */
 @Injectable()
@@ -110,28 +116,70 @@ export class EnrollmentService {
     return { items: rows.map(toEnrollmentView), nextCursor: page.nextCursor };
   }
 
-  /** Throws ENROLLMENT_NOT_FOUND unless the contributor is enrolled in the program. */
-  async assertEnrolled(
+  /**
+   * What the payment path needs to know about a contributor before it knows
+   * the program's type, which it reads beside this: whether they are
+   * enrolled — all a periodic program accepts — and whether their record is
+   * live — all a temporary one needs. Both reads run at once, so either
+   * answer costs one round trip.
+   */
+  async lookUpContributorPayer(
+    programId: string,
+    contributorId: string,
+  ): Promise<{ enrolled: boolean; live: boolean }> {
+    const [enrollment, contributor] = await Promise.all([
+      this.prisma.programEnrollment.findUnique({
+        where: { contributorId_programId: { contributorId, programId } },
+        select: { id: true },
+      }),
+      // findFirst: a deleted or merged-away record cannot start giving.
+      this.prisma.contributor.findFirst({
+        where: { id: contributorId },
+        select: { id: true },
+      }),
+    ]);
+    return { enrolled: enrollment !== null, live: contributor !== null };
+  }
+
+  /**
+   * A contributor's first gift to a temporary program: the pledge-free donor
+   * row Payment's composite FK needs. Runs on the transaction that books the
+   * gift, so a refused gift leaves no donor behind. skipDuplicates (ON
+   * CONFLICT DO NOTHING): two first gifts racing both land on one row.
+   */
+  async addDonor(
+    db: Pick<PrismaService, 'programEnrollment'>,
     programId: string,
     contributorId: string,
   ): Promise<void> {
-    // Only the id: the payment path needs to know the enrollment exists, and
-    // a nested contributor select would cost it a second round trip.
-    const enrollment = await this.prisma.programEnrollment.findUnique({
-      where: { contributorId_programId: { contributorId, programId } },
-      select: { id: true },
+    await db.programEnrollment.createMany({
+      data: [{ programId, contributorId, expectedRate: '0' }],
+      skipDuplicates: true,
     });
-    if (!enrollment) {
-      throw new AppException(
-        'ENROLLMENT_NOT_FOUND',
-        { programId, contributorId },
-        HttpStatus.NOT_FOUND,
-      );
+  }
+
+  /**
+   * After a gift to a temporary program is removed: drops the giver's donor
+   * row once nothing of theirs is left there, so they leave the program's
+   * donor list and their contributor record can be removed again.
+   */
+  async removeDonorIfEmpty(
+    programId: string,
+    contributorId: string,
+  ): Promise<void> {
+    try {
+      await this.prisma.programEnrollment.deleteMany({
+        where: { programId, contributorId, payments: { none: {} } },
+      });
+    } catch (err) {
+      // A gift booked between the filter and the delete: the composite FK
+      // refused, and the row is still needed.
+      if (!isForeignKeyViolation(err)) throw err;
     }
   }
 
   async createEnrollment(programId: string, dto: CreateEnrollmentDto) {
-    const program = await this.programService.assertProgramExists(programId);
+    const program = await this.assertTakesEnrollments(programId);
     // The FK would accept a soft-deleted or merged-away contributor; this would
     // not.
     if (dto.contributorId)
@@ -188,7 +236,13 @@ export class EnrollmentService {
     enrollmentId: string,
     dto: UpdateEnrollmentDto,
   ) {
-    await this.findEnrollmentOrThrow(programId, enrollmentId);
+    // Side by side, settled so the program's answer always comes first.
+    const [program, found] = await Promise.allSettled([
+      this.assertTakesEnrollments(programId),
+      this.findEnrollmentOrThrow(programId, enrollmentId),
+    ]);
+    if (program.status === 'rejected') throw program.reason;
+    if (found.status === 'rejected') throw found.reason;
     const enrollment = await this.prisma.programEnrollment.update({
       where: { id: enrollmentId },
       data: dto,
@@ -203,13 +257,21 @@ export class EnrollmentService {
 
   async markEnrollmentDormant(programId: string, enrollmentId: string) {
     // The conditional update is the transition: two clicks race and exactly
-    // one flips the status.
+    // one flips the status. A donor row in a temporary program never goes
+    // dormant — there is no subscription to pause — so the filter skips it
+    // and the miss is explained below.
     const { count } = await this.prisma.programEnrollment.updateMany({
-      where: { id: enrollmentId, programId, status: 'ACTIVE' },
+      where: {
+        id: enrollmentId,
+        programId,
+        status: 'ACTIVE',
+        program: { type: 'PERIODIC' },
+      },
       data: { status: 'DORMANT' },
     });
     if (count === 0) {
       await this.findEnrollmentOrThrow(programId, enrollmentId);
+      await this.assertTakesEnrollments(programId);
       throw new AppException(
         'ENROLLMENT_ALREADY_DORMANT',
         { enrollmentId },
@@ -299,6 +361,21 @@ export class EnrollmentService {
     _collectorId: string | null,
   ): never {
     throw pendingFeature('enrollment.assign-collector');
+  }
+
+  // A temporary program's rows belong to the payment path, which adds and
+  // removes them with the gifts; enrolling, a pledge or dormancy there would
+  // turn a donor into a subscriber the program does not have.
+  private async assertTakesEnrollments(programId: string): Promise<ProgramRow> {
+    const program = await this.programService.assertProgramExists(programId);
+    if (program.type === 'TEMPORARY') {
+      throw new AppException(
+        'ENROLLMENT_PROGRAM_TEMPORARY',
+        { programName: program.name },
+        HttpStatus.CONFLICT,
+      );
+    }
+    return program;
   }
 
   // findFirst on (id, programId) so an enrollment id from another program

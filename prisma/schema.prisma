@@ -9,15 +9,18 @@
 //                    مواساة, جامع السعيد, each campaign) is a row here — and
 //                    its own Cycle rows when it has cycles
 //   4. Enrollment    ProgramEnrollment — a Contributor's participation in one
-//                    Program, carrying that program's pledge for them
+//                    Program: a subscription with its pledge in a PERIODIC
+//                    program, a pledge-free donor row in a TEMPORARY one
 //   5. Payments      Payment — money a Program received
 //
 // Rules that span models
 //   - A Payment has exactly one payer: a Contributor, a free-text name, or
 //     another Program (CHECK "Payment_exactly_one_payer"). A Contributor payer
-//     must be enrolled in the receiving program — the composite FK
+//     has a ProgramEnrollment in the receiving program — the composite FK
 //     (contributorId, programId) → ProgramEnrollment makes that a database
-//     fact.
+//     fact. A periodic program's subscribers are enrolled by hand; a
+//     temporary program's donor row comes with their first gift and goes
+//     with their last (EnrollmentService.addDonor / removeDonorIfEmpty).
 //   - A Payment is either a monthly cell (year + month) or a dated entry
 //     (paymentDate, year derived from it). Programs that are PERIODIC with
 //     cycles keep the monthly grid; every other program keeps a dated ledger.
@@ -239,18 +242,24 @@ enum EnrollmentStatus {
 
 /// A Contributor's participation in one Program. Hard-deleted only while it has
 /// no payments (a mistaken enrollment); with payments it can only go dormant.
+///
+/// In a TEMPORARY program the row is a donor row instead: nobody enrolls, it
+/// carries no pledge or previous subscription (both stay 0, ACTIVE), and the
+/// payment path adds and removes it beside the donor's gifts. It exists only
+/// because Payment's composite FK needs a row under every contributor payment.
 model ProgramEnrollment {
   id                   String           @id @default(uuid())
   contributorId             String
   programId            String
   // The pledged yearly amount for this contributor in this program (معدل
   // الاشتراك السنوي) — expected revenue. Never derived from payments: it is the
-  // yardstick payments are measured against. Zero means no pledge (a one-time
-  // campaign donor). CHECK "ProgramEnrollment_expected_rate_non_negative".
+  // yardstick payments are measured against. Zero means no pledge — always so
+  // in a temporary program. CHECK "ProgramEnrollment_expected_rate_non_negative".
   expectedRate         Decimal          @db.Decimal(14, 2)
-  // الاشتراك السابق — everything this contributor paid this program before its
-  // current cycle, typed in from the old books. Never recomputed: the
-  // payments it summarises predate this system.
+  // الاشتراك السابق — everything this contributor paid this program since
+  // joining and before this system held its books, typed in from the old
+  // books. Never recomputed: the payments it summarises predate this system.
+  // Periodic programs only.
   previousSubscription Decimal          @default(0) @db.Decimal(14, 2)
   status               EnrollmentStatus @default(ACTIVE)
   createdAt            DateTime         @default(now())

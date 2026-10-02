@@ -17,12 +17,21 @@ import {
   toPaymentEntryView,
 } from './payment.util';
 
+// What EnrollmentService.lookUpContributorPayer found; null for the payer
+// kinds that are checked outright.
+type ContributorPayerFacts = { enrolled: boolean; live: boolean };
+
 /**
  * Writes money into a program's books, in the program's entry mode
  * (programEntryMode): monthly cells for PERIODIC programs with cycles, dated
  * entries for everything else. Writes stay inside the program's current
  * cycle when it has one — which is also what fences off the unconfirmed
  * advance-payment flow.
+ *
+ * A periodic program is paid by the contributors enrolled in it. A temporary
+ * one takes a gift from anyone in the directory with no enrolling: their
+ * first gift adds the donor row Payment's composite FK needs, and removing
+ * their last gift removes it.
  */
 @Injectable()
 export class PaymentService {
@@ -89,10 +98,14 @@ export class PaymentService {
     dto: RecordPaymentDto,
   ) {
     const year = dto.paymentDate.getUTCFullYear();
-    await this.assertWritable(programId, year, 'DATED', dto.payer);
-
-    try {
-      const payment = await this.prisma.payment.create({
+    const { newDonorId } = await this.assertWritable(
+      programId,
+      year,
+      'DATED',
+      dto.payer,
+    );
+    const create = (db: Pick<PrismaService, 'payment'>) =>
+      db.payment.create({
         data: {
           programId,
           ...payerColumns(dto.payer),
@@ -104,6 +117,17 @@ export class PaymentService {
         },
         select: PAYMENT_ENTRY_SELECT,
       });
+
+    try {
+      // A first gift's donor row and the gift commit together: a gift
+      // refused for any reason must not leave a donor who never gave. Every
+      // later gift is the single insert.
+      const payment = newDonorId
+        ? await this.prisma.$transaction(async (tx) => {
+            await this.enrollmentService.addDonor(tx, programId, newDonorId);
+            return create(tx);
+          })
+        : await create(this.prisma);
       return {
         ...toPaymentEntryView(payment),
         successCode: 'PAYMENT_RECORD_SUCCESS',
@@ -124,7 +148,7 @@ export class PaymentService {
       // the payer and month are explicit.
       this.prisma.payment.findFirst({
         where: { id: paymentId, programId, month: null },
-        select: { year: true },
+        select: { year: true, contributorId: true },
       }),
       this.cycleService.resolveWindow(programId),
     ]);
@@ -140,7 +164,7 @@ export class PaymentService {
     }
     if (window.status === 'rejected') throw window.reason;
     // The same cycle fence as writing it.
-    const { cycle } = window.value;
+    const { cycle, program } = window.value;
     if (cycle) this.cycleService.assertYearInCycle(cycle, payment.year);
 
     // Hard delete, like clearing a cell: a wrong entry is removed so every
@@ -148,6 +172,14 @@ export class PaymentService {
     await this.prisma.payment.deleteMany({
       where: { id: paymentId, programId },
     });
+    // A donor is someone who gave. Left in place after their last gift went,
+    // the row would list them among the program's donors with nothing given.
+    if (program.type === 'TEMPORARY' && payment.contributorId) {
+      await this.enrollmentService.removeDonorIfEmpty(
+        programId,
+        payment.contributorId,
+      );
+    }
     return { id: paymentId, successCode: 'PAYMENT_DELETE_SUCCESS' };
   }
 
@@ -179,26 +211,40 @@ export class PaymentService {
 
   /**
    * The checks in front of every payment write: the program exists, keeps
-   * this entry mode and its current cycle holds the year; and the payer is
-   * valid there. They read independent rows, so they run side by side — a
-   * cell save was waiting on them one after another. Settled rather than
+   * this entry mode and its current cycle holds the year; and the payer may
+   * pay it. They read independent rows, so they run side by side — a cell
+   * save was waiting on them one after another. Settled rather than
    * Promise.all so the program's error always answers first, as it did when
    * it was checked first: an unknown program reads as PROGRAM_NOT_FOUND, not
    * ENROLLMENT_NOT_FOUND.
+   *
+   * newDonorId is set when the write is a contributor's first gift to a
+   * temporary program; the caller adds their donor row beside it.
    */
   private async assertWritable(
     programId: string,
     year: number,
     mode: EntryMode,
     payer: PaymentPayer,
-  ): Promise<void> {
+  ): Promise<{ newDonorId: string | null }> {
     const [window, payerCheck] = await Promise.allSettled([
       this.cycleService.resolveWindow(programId, year),
-      this.assertPayer(programId, payer),
+      this.lookUpPayer(programId, payer),
     ]);
     if (window.status === 'rejected') throw window.reason;
-    this.assertEntryMode(window.value.program, mode);
+    const { program } = window.value;
+    this.assertEntryMode(program, mode);
     if (payerCheck.status === 'rejected') throw payerCheck.reason;
+    if (payer.kind !== 'CONTRIBUTOR' || !payerCheck.value) {
+      return { newDonorId: null };
+    }
+    return {
+      newDonorId: this.assertContributorMayPay(
+        program,
+        payer.contributorId,
+        payerCheck.value,
+      ),
+    };
   }
 
   private assertEntryMode(program: ProgramView, mode: EntryMode): void {
@@ -210,19 +256,45 @@ export class PaymentService {
     );
   }
 
-  private async assertPayer(
+  // Which fact decides depends on the program's type, known only now.
+  // Returns the contributor when this gift needs a donor row first.
+  private assertContributorMayPay(
+    program: ProgramView,
+    contributorId: string,
+    { enrolled, live }: ContributorPayerFacts,
+  ): string | null {
+    if (enrolled) return null;
+    // Also a database fact (Payment's composite FK); this gives the readable
+    // error.
+    if (program.type === 'PERIODIC') {
+      throw new AppException(
+        'ENROLLMENT_NOT_FOUND',
+        { programId: program.id, contributorId },
+        HttpStatus.NOT_FOUND,
+      );
+    }
+    if (!live) {
+      throw new AppException(
+        'CONTRIBUTOR_NOT_FOUND',
+        { contributorId },
+        HttpStatus.NOT_FOUND,
+      );
+    }
+    return contributorId;
+  }
+
+  private async lookUpPayer(
     programId: string,
     payer: PaymentPayer,
-  ): Promise<void> {
+  ): Promise<ContributorPayerFacts | null> {
     switch (payer.kind) {
       case 'CONTRIBUTOR':
-        // Also a database fact (Payment's composite FK); this gives the
-        // readable error.
-        await this.enrollmentService.assertEnrolled(
+        // Facts, not a verdict: whether enrollment is required waits on the
+        // program's type, which resolveWindow is reading beside this.
+        return this.enrollmentService.lookUpContributorPayer(
           programId,
           payer.contributorId,
         );
-        return;
       case 'PROGRAM': {
         // TODO(expenses): a program paying another is an outflow for the
         // payer. Today it is recorded only here, as revenue of the receiving
@@ -246,11 +318,11 @@ export class PaymentService {
             HttpStatus.NOT_FOUND,
           );
         }
-        return;
+        return null;
       }
       case 'FREETEXT':
         // Nothing to look up: this payer is, by definition, not in the system.
-        return;
+        return null;
     }
   }
 

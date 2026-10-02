@@ -10,7 +10,12 @@ const mockPrisma = {
     update: jest.fn(),
     updateMany: jest.fn(),
   },
-  programEnrollment: { findMany: jest.fn(), updateMany: jest.fn() },
+  programEnrollment: {
+    findMany: jest.fn(),
+    updateMany: jest.fn(),
+    deleteMany: jest.fn(),
+  },
+  payment: { updateMany: jest.fn() },
   contributorDuplicateFlag: {
     findMany: jest.fn(),
     findUnique: jest.fn(),
@@ -172,7 +177,7 @@ describe('ContributorDuplicateService', () => {
       mockPrisma.programEnrollment.findMany
         .mockResolvedValueOnce([{ programId: 'fund' }]) // kept
         .mockResolvedValueOnce([
-          { programId: 'mwa', program: { name: 'مواساة' } },
+          { programId: 'mwa', program: { name: 'مواساة', type: 'PERIODIC' } },
         ]); // merged away
       mockPrisma.programEnrollment.updateMany.mockResolvedValue({ count: 1 });
 
@@ -218,7 +223,7 @@ describe('ContributorDuplicateService', () => {
       mockPrisma.programEnrollment.findMany
         .mockResolvedValueOnce([{ programId: 'mwa' }])
         .mockResolvedValueOnce([
-          { programId: 'mwa', program: { name: 'مواساة' } },
+          { programId: 'mwa', program: { name: 'مواساة', type: 'PERIODIC' } },
         ]);
 
       await expect(
@@ -232,6 +237,39 @@ describe('ContributorDuplicateService', () => {
         },
       });
       expect(mockPrisma.programEnrollment.updateMany).not.toHaveBeenCalled();
+      expect(mockPrisma.payment.updateMany).not.toHaveBeenCalled();
+    });
+
+    // Donor rows carry no pledge and dated gifts have no month key, so two
+    // records that both gave to one campaign fold into the kept donor row.
+    it('folds two donor rows in the same temporary program instead of refusing', async () => {
+      mockPrisma.programEnrollment.findMany
+        .mockResolvedValueOnce([{ programId: 'camp' }, { programId: 'fund' }])
+        .mockResolvedValueOnce([
+          { programId: 'camp', program: { name: 'حملة', type: 'TEMPORARY' } },
+          { programId: 'mwa', program: { name: 'مواساة', type: 'PERIODIC' } },
+        ]);
+      mockPrisma.programEnrollment.updateMany.mockResolvedValue({ count: 1 });
+
+      const result = await service.mergeFlag('u1', 'f1', {
+        keepContributorId: 'pa',
+      });
+
+      expect(mockPrisma.payment.updateMany).toHaveBeenCalledWith({
+        where: { contributorId: 'pb', programId: { in: ['camp'] } },
+        data: { contributorId: 'pa' },
+      });
+      expect(mockPrisma.programEnrollment.deleteMany).toHaveBeenCalledWith({
+        where: { contributorId: 'pb', programId: { in: ['camp'] } },
+      });
+      // The gifts move before the emptied row is dropped — the other order
+      // would be refused by the composite FK.
+      expect(
+        mockPrisma.payment.updateMany.mock.invocationCallOrder[0],
+      ).toBeLessThan(
+        mockPrisma.programEnrollment.deleteMany.mock.invocationCallOrder[0],
+      );
+      expect(result).toMatchObject({ movedEnrollments: 2 });
     });
 
     it('refuses to keep someone outside the flagged pair, before retiring anyone', async () => {

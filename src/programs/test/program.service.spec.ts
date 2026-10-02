@@ -11,6 +11,7 @@ const mockPrisma = {
     update: jest.fn(),
   },
   payment: { count: jest.fn() },
+  programEnrollment: { count: jest.fn() },
   // findFirst/findMany: the current cycle, read beside every program read.
   cycle: { count: jest.fn(), findFirst: jest.fn(), findMany: jest.fn() },
 };
@@ -114,6 +115,24 @@ describe('ProgramService', () => {
       ).rejects.toMatchObject({
         errorCode: 'PROGRAM_SHAPE_LOCKED',
         meta: { payments: 3, cycles: 0 },
+      });
+      expect(mockPrisma.program.update).not.toHaveBeenCalled();
+    });
+
+    it('keeps a periodic program with subscribers from turning temporary, which keeps no pledges', async () => {
+      mockPrisma.program.findFirst.mockResolvedValue({
+        ...CAMPAIGN,
+        type: 'PERIODIC',
+      });
+      mockPrisma.payment.count.mockResolvedValue(0);
+      mockPrisma.cycle.count.mockResolvedValue(0);
+      mockPrisma.programEnrollment.count.mockResolvedValue(2);
+
+      await expect(
+        service.updateProgram('camp', { type: 'TEMPORARY' }),
+      ).rejects.toMatchObject({
+        errorCode: 'PROGRAM_TYPE_LOCKED',
+        meta: { enrollments: 2 },
       });
       expect(mockPrisma.program.update).not.toHaveBeenCalled();
     });

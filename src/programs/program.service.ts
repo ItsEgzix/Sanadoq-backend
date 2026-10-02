@@ -124,10 +124,11 @@ export class ProgramService {
     const existing = await this.assertProgramExists(programId);
     // Sending the current value back is not a change — a form that posts
     // every field must still be able to rename the protected program.
+    const typeChanged = dto.type !== undefined && dto.type !== existing.type;
     const shapeChanged =
-      (dto.type !== undefined && dto.type !== existing.type) ||
+      typeChanged ||
       (dto.hasCycles !== undefined && dto.hasCycles !== existing.hasCycles);
-    if (shapeChanged) await this.assertShapeEditable(existing);
+    if (shapeChanged) await this.assertShapeEditable(existing, typeChanged);
 
     try {
       const program = await this.prisma.program.update({
@@ -171,8 +172,13 @@ export class ProgramService {
 
   // type and hasCycles decide whether payments are monthly cells or dated
   // entries (programEntryMode). Flipping them under existing payments or
-  // cycles would strand rows in a shape the program no longer reads.
-  private async assertShapeEditable(program: ProgramRow): Promise<void> {
+  // cycles would strand rows in a shape the program no longer reads. type
+  // also decides whether the program has subscribers at all: a periodic
+  // program's enrollments carry pledges a temporary one does not keep.
+  private async assertShapeEditable(
+    program: ProgramRow,
+    typeChanged: boolean,
+  ): Promise<void> {
     if (program.isProtected) {
       throw new AppException(
         'PROGRAM_PROTECTED_SHAPE',
@@ -180,14 +186,26 @@ export class ProgramService {
         HttpStatus.CONFLICT,
       );
     }
-    const [payments, cycles] = await Promise.all([
+    const [payments, cycles, enrollments] = await Promise.all([
       this.prisma.payment.count({ where: { programId: program.id } }),
       this.prisma.cycle.count({ where: { programId: program.id } }),
+      typeChanged
+        ? this.prisma.programEnrollment.count({
+            where: { programId: program.id },
+          })
+        : 0,
     ]);
     if (payments > 0 || cycles > 0) {
       throw new AppException(
         'PROGRAM_SHAPE_LOCKED',
         { payments, cycles },
+        HttpStatus.CONFLICT,
+      );
+    }
+    if (enrollments > 0) {
+      throw new AppException(
+        'PROGRAM_TYPE_LOCKED',
+        { enrollments },
         HttpStatus.CONFLICT,
       );
     }

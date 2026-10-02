@@ -22,6 +22,7 @@
     "db:generate": "prisma generate",
     "seed:demo": "tsx src/scripts/seed-demo.ts",
     "seed:contributors": "tsx src/scripts/seed-contributors.ts",
+    "seed:fund-eradat": "tsx src/scripts/seed-fund-eradat.ts",
     "create:user": "tsx src/scripts/create-user.ts",
     "migrate:legacy-eradat": "tsx src/scripts/migrate-legacy-eradat.ts"
   },
