@@ -22,6 +22,11 @@ export function isYearInCycle(cycle: CycleRange, year: number): boolean {
   return year >= cycle.startYear && year <= cycle.endYear;
 }
 
+/** The years of `before` that `after` no longer covers, oldest first. */
+export function removedYears(before: CycleRange, after: CycleRange): number[] {
+  return cycleYears(before).filter((year) => !isYearInCycle(after, year));
+}
+
 /**
  * The nearest cycle year to `year`. Picks the grid's default tab: a cycle
  * that has not started yet opens on its first year, a finished one on its last.

@@ -23,10 +23,10 @@ type ContributorPayerFacts = { enrolled: boolean; live: boolean };
 
 /**
  * Writes money into a program's books, in the program's entry mode
- * (programEntryMode): monthly cells for PERIODIC programs with cycles, dated
- * entries for everything else. Writes stay inside the program's current
- * cycle when it has one — which is also what fences off the unconfirmed
- * advance-payment flow.
+ * (programEntryMode): monthly cells for PERIODIC programs, dated entries for
+ * TEMPORARY ones. A periodic program's cells stay inside its current cycle —
+ * which is also what fences off the unconfirmed advance-payment flow; a
+ * temporary program has no cycle, so its gifts take any date.
  *
  * A periodic program is paid by the contributors enrolled in it. A temporary
  * one takes a gift from anyone in the directory with no enrolling: their
@@ -141,8 +141,7 @@ export class PaymentService {
   }
 
   async deletePayment(programId: string, paymentId: string) {
-    // Side by side: the entry and the program's window. The entry's year is
-    // checked against the window once both are in.
+    // Side by side: the entry and the program it sits in.
     const [found, window] = await Promise.allSettled([
       // month NULL: monthly cells are cleared through their cell URL, where
       // the payer and month are explicit.
@@ -163,9 +162,9 @@ export class PaymentService {
       );
     }
     if (window.status === 'rejected') throw window.reason;
-    // The same cycle fence as writing it.
-    const { cycle, program } = window.value;
-    if (cycle) this.cycleService.assertYearInCycle(cycle, payment.year);
+    // No cycle fence: dated entries live only in temporary programs, which
+    // have no cycles (runsInCycles), just as recording one has none.
+    const { program } = window.value;
 
     // Hard delete, like clearing a cell: a wrong entry is removed so every
     // total drops it at once. An audit trail of corrections is not built yet.

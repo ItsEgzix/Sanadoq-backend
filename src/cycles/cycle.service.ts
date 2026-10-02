@@ -2,18 +2,24 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { AppException } from '../common/exceptions/app.exception';
 import type { ProgramRow } from '../programs/program.constant';
 import { ProgramService } from '../programs/program.service';
-import { toProgramView, type ProgramView } from '../programs/program.util';
+import {
+  runsInCycles,
+  toProgramView,
+  type ProgramView,
+} from '../programs/program.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { CYCLE_LIST_CAP, CYCLE_SELECT, type CycleRow } from './cycle.constant';
 import {
   clampYearToCycle,
   cycleEndYear,
   isYearInCycle,
+  removedYears,
   toCycleView,
   type CycleRange,
   type CycleView,
 } from './cycle.util';
 import type { CreateCycleDto } from './dto/create-cycle.dto';
+import type { SplitCycleDto } from './dto/split-cycle.dto';
 import type { UpdateCycleDto } from './dto/update-cycle.dto';
 
 // The slice of a client (or interactive transaction) the range guards read.
@@ -43,10 +49,10 @@ export class CycleService {
   ) {}
 
   /**
-   * The program and the year a read or write targets. With cycles: the
-   * requested year, which must sit in the current cycle, or this calendar
-   * year clamped into it. Without: any year, defaulting to this one — there
-   * is no boundary to fence it into. UTC is close enough for a default tab.
+   * The program and the year a read or write targets. A periodic program:
+   * the requested year, which must sit in the current cycle, or this calendar
+   * year clamped into it. A temporary one: any year, defaulting to this one —
+   * it has no cycle to fence it into. UTC is close enough for a default tab.
    */
   async resolveWindow(
     programId: string,
@@ -159,9 +165,12 @@ export class CycleService {
     const lengthYears = dto.lengthYears ?? existing.lengthYears;
     const next = { startYear, endYear: cycleEndYear(startYear, lengthYears) };
 
+    this.assertKeepsThisYear(existing, [next]);
+
     const cycle = await this.prisma.$transaction(async (tx) => {
       await this.assertNoOverlap(tx, programId, next, cycleId);
       await this.assertNoStrandedPayments(tx, programId, existing, next);
+      await this.assertNoGap(tx, programId, cycleId, existing, [next]);
       return tx.cycle.update({
         where: { id: cycleId },
         data: { startYear, lengthYears, endYear: next.endYear },
@@ -169,6 +178,79 @@ export class CycleService {
       });
     });
     return { ...toCycleView(cycle), successCode: 'CYCLE_UPDATE_SUCCESS' };
+  }
+
+  /**
+   * Shortens a cycle and starts the next one the year after, in one
+   * transaction. Payments are stored by year, not by cycle, so the years cut
+   * off simply become the new cycle's — with every payment in them — and
+   * nothing has to be deleted to change a cycle's length.
+   *
+   * The new cycle becomes current only when this was the current cycle and
+   * this year now falls in the new one; otherwise currency stays put.
+   */
+  async splitCycle(programId: string, cycleId: string, dto: SplitCycleDto) {
+    const existing = await this.findCycleOrThrow(programId, cycleId);
+    if (dto.lengthYears >= existing.lengthYears) {
+      throw new AppException('CYCLE_SPLIT_NOT_SHORTER', {
+        lengthYears: existing.lengthYears,
+      });
+    }
+    const kept: CycleRange = {
+      startYear: existing.startYear,
+      endYear: cycleEndYear(existing.startYear, dto.lengthYears),
+    };
+    const nextStart = kept.endYear + 1;
+    const next: CycleRange = {
+      startYear: nextStart,
+      endYear: cycleEndYear(nextStart, dto.nextLengthYears),
+    };
+    // Both halves together: what the program's cycles cover after the split.
+    const span = { startYear: kept.startYear, endYear: next.endYear };
+    this.assertKeepsThisYear(existing, [kept, next]);
+    const thisYear = new Date().getUTCFullYear();
+    const nextIsCurrent =
+      existing.isCurrent &&
+      !isYearInCycle(kept, thisYear) &&
+      isYearInCycle(next, thisYear);
+
+    const [shortened, created] = await this.prisma.$transaction(async (tx) => {
+      await this.assertNoOverlap(tx, programId, span, cycleId);
+      await this.assertNoStrandedPayments(tx, programId, existing, span);
+      await this.assertNoGap(tx, programId, cycleId, existing, [kept, next]);
+      // Shrink first: until it does, the new cycle would overlap it and
+      // EXCLUDE "Cycle_no_overlap_per_program" would refuse the insert. The
+      // demotion rides on the same update, ahead of the insert, so the
+      // per-program current index never sees two.
+      const updated = await tx.cycle.update({
+        where: { id: cycleId },
+        data: {
+          lengthYears: dto.lengthYears,
+          endYear: kept.endYear,
+          ...(nextIsCurrent ? { isCurrent: false } : {}),
+        },
+        select: CYCLE_SELECT,
+      });
+      const inserted = await tx.cycle.create({
+        data: {
+          programId,
+          startYear: next.startYear,
+          lengthYears: dto.nextLengthYears,
+          endYear: next.endYear,
+          isCurrent: nextIsCurrent,
+        },
+        select: CYCLE_SELECT,
+      });
+      return [updated, inserted];
+    });
+    return {
+      startYear: shortened.startYear,
+      endYear: shortened.endYear,
+      nextStartYear: created.startYear,
+      nextEndYear: created.endYear,
+      cycles: [toCycleView(shortened), toCycleView(created)],
+      successCode: 'CYCLE_SPLIT_SUCCESS',
+    };
   }
 
   async activateCycle(programId: string, cycleId: string) {
@@ -190,13 +272,13 @@ export class CycleService {
     return { ...toCycleView(cycle), successCode: 'CYCLE_ACTIVATE_SUCCESS' };
   }
 
-  // A program without cycles runs as continuous flow; giving it a cycle
-  // anyway would fence its writes behind a boundary it does not have.
+  // A temporary program is one need, collected once; giving it a cycle would
+  // fence its gifts behind a boundary it does not have.
   private async assertProgramKeepsCycles(
     programId: string,
   ): Promise<ProgramRow> {
     const program = await this.programService.assertProgramExists(programId);
-    if (!program.hasCycles) {
+    if (!runsInCycles(program)) {
       throw new AppException(
         'PROGRAM_HAS_NO_CYCLES',
         { programId, name: program.name },
@@ -254,8 +336,61 @@ export class CycleService {
     }
   }
 
+  // The current cycle is the fence every write stays inside. A change that
+  // moves this year out of it would refuse every payment for this year, with
+  // no warning, until someone created and activated another cycle.
+  private assertKeepsThisYear(existing: CycleRow, after: CycleRange[]): void {
+    const year = new Date().getUTCFullYear();
+    if (!existing.isCurrent || !isYearInCycle(existing, year)) return;
+    if (after.some((range) => isYearInCycle(range, year))) return;
+    throw new AppException(
+      'CYCLE_CURRENT_DROPS_THIS_YEAR',
+      { year, startYear: existing.startYear, endYear: existing.endYear },
+      HttpStatus.CONFLICT,
+    );
+  }
+
+  // A year cut from this cycle that sits between two of the program's
+  // cycles would belong to none of them: no cycle could ever be made current
+  // with it inside, so its payments could never be recorded or read. Years
+  // cut from the far end, with no cycle after them yet, are fine — the next
+  // cycle will start there.
+  private async assertNoGap(
+    db: CycleReader,
+    programId: string,
+    cycleId: string,
+    before: CycleRange,
+    after: CycleRange[],
+  ): Promise<void> {
+    const outside = removedYears(before, {
+      startYear: Math.min(...after.map((range) => range.startYear)),
+      endYear: Math.max(...after.map((range) => range.endYear)),
+    });
+    if (outside.length === 0) return;
+    const others = await db.cycle.findMany({
+      where: { programId, NOT: { id: cycleId } },
+      select: { startYear: true, endYear: true },
+      take: CYCLE_LIST_CAP,
+    });
+    const ranges = [...others, ...after];
+    const gap = outside.filter(
+      (year) =>
+        ranges.some((range) => range.endYear < year) &&
+        ranges.some((range) => range.startYear > year),
+    );
+    if (gap.length > 0) {
+      const [first, last] = [gap[0], gap[gap.length - 1]];
+      throw new AppException(
+        'CYCLE_LEAVES_GAP',
+        { years: first === last ? `${first}` : `${first}–${last}` },
+        HttpStatus.CONFLICT,
+      );
+    }
+  }
+
   // Shortening a cycle (4 → 3 years) must not silently drop a year of
-  // payments out of every running total.
+  // payments out of every running total. splitCycle passes both halves as
+  // one range, so the cut years count as kept when the new cycle takes them.
   private async assertNoStrandedPayments(
     db: CycleReader,
     programId: string,

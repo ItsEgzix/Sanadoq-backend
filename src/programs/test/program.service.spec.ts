@@ -20,7 +20,6 @@ const FUND = {
   id: 'fund',
   name: 'اشتراكات الصندوق',
   type: 'PERIODIC' as const,
-  hasCycles: true,
   isProtected: true,
   sortOrder: 0,
   cycles: [],
@@ -30,7 +29,6 @@ const CAMPAIGN = {
   id: 'camp',
   name: 'حملة',
   type: 'TEMPORARY' as const,
-  hasCycles: false,
   isProtected: false,
 };
 
@@ -73,30 +71,23 @@ describe('ProgramService', () => {
   });
 
   describe('updateProgram', () => {
-    it.each([
-      ['type', { type: 'TEMPORARY' as const }],
-      ['hasCycles', { hasCycles: false }],
-    ])(
-      'refuses to change the protected program %s, before counting anything',
-      async (_field, dto) => {
-        mockPrisma.program.findFirst.mockResolvedValue(FUND);
+    it('refuses to change the protected program’s type, before counting anything', async () => {
+      mockPrisma.program.findFirst.mockResolvedValue(FUND);
 
-        await expect(service.updateProgram('fund', dto)).rejects.toMatchObject({
-          errorCode: 'PROGRAM_PROTECTED_SHAPE',
-        });
-        expect(mockPrisma.program.update).not.toHaveBeenCalled();
-        expect(mockPrisma.payment.count).not.toHaveBeenCalled();
-      },
-    );
+      await expect(
+        service.updateProgram('fund', { type: 'TEMPORARY' }),
+      ).rejects.toMatchObject({ errorCode: 'PROGRAM_PROTECTED_SHAPE' });
+      expect(mockPrisma.program.update).not.toHaveBeenCalled();
+      expect(mockPrisma.payment.count).not.toHaveBeenCalled();
+    });
 
-    it('lets a form resend the protected program’s current type and cycle mode alongside a rename', async () => {
+    it('lets a form resend the protected program’s current type alongside a rename', async () => {
       mockPrisma.program.findFirst.mockResolvedValue(FUND);
       mockPrisma.program.update.mockResolvedValue({ ...FUND, name: 'renamed' });
 
       const result = await service.updateProgram('fund', {
         name: 'renamed',
         type: 'PERIODIC',
-        hasCycles: true,
       });
 
       expect(result).toMatchObject({
@@ -105,10 +96,11 @@ describe('ProgramService', () => {
       });
     });
 
-    it('locks an ordinary program’s shape once it has payments', async () => {
+    it('locks an ordinary program’s type once it has payments', async () => {
       mockPrisma.program.findFirst.mockResolvedValue(CAMPAIGN);
       mockPrisma.payment.count.mockResolvedValue(3);
       mockPrisma.cycle.count.mockResolvedValue(0);
+      mockPrisma.programEnrollment.count.mockResolvedValue(0);
 
       await expect(
         service.updateProgram('camp', { type: 'PERIODIC' }),
@@ -137,22 +129,19 @@ describe('ProgramService', () => {
       expect(mockPrisma.program.update).not.toHaveBeenCalled();
     });
 
-    it('reshapes an ordinary program with no payments or cycles', async () => {
+    it('turns an empty temporary program periodic, which brings cycles and the grid with it', async () => {
       mockPrisma.program.findFirst.mockResolvedValue(CAMPAIGN);
       mockPrisma.payment.count.mockResolvedValue(0);
       mockPrisma.cycle.count.mockResolvedValue(0);
+      mockPrisma.programEnrollment.count.mockResolvedValue(0);
       mockPrisma.program.update.mockResolvedValue({
         ...CAMPAIGN,
         type: 'PERIODIC',
-        hasCycles: true,
       });
 
-      const result = await service.updateProgram('camp', {
-        type: 'PERIODIC',
-        hasCycles: true,
-      });
+      const result = await service.updateProgram('camp', { type: 'PERIODIC' });
 
-      expect(result.entryMode).toBe('MONTHLY');
+      expect(result).toMatchObject({ hasCycles: true, entryMode: 'MONTHLY' });
     });
 
     it('turns a live-name clash into PROGRAM_NAME_TAKEN', async () => {
@@ -179,7 +168,6 @@ describe('ProgramService', () => {
       await service.createProgram({
         name: 'حملة',
         type: 'TEMPORARY',
-        hasCycles: false,
       });
 
       const { data } = mockPrisma.program.create.mock.calls[0][0];
@@ -197,7 +185,6 @@ describe('ProgramService', () => {
         service.createProgram({
           name: 'x',
           type: 'TEMPORARY',
-          hasCycles: false,
         }),
       ).rejects.toMatchObject({ errorCode: 'PROGRAM_LIMIT_REACHED' });
       expect(mockPrisma.program.create).not.toHaveBeenCalled();

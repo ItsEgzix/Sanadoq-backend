@@ -7,7 +7,8 @@
  *   - مواساة, its own monthly grid and cycle, with some of the same
  *     contributors at different rates, plus the fund's monthly contribution as
  *     a transfer row;
- *   - جامع السعيد, a standing program with no cycles (a dated ledger);
+ *   - جامع السعيد, a smaller standing program in the same cycle, paid
+ *     monthly with gaps;
  *   - a Ramadan campaign with one-off donors who are in no directory, and a
  *     donation from the fund;
  *   - two invented look-alike pairs, raised as duplicate flags for review —
@@ -352,14 +353,9 @@ async function main() {
     // Programs — by live name, since the unique index is on lower(name).
     const programs = new Map<string, string>([['fund', fund.id]]);
     const wanted = [
-      { key: MWA, type: 'PERIODIC' as const, hasCycles: true, sortOrder: 1 },
-      { key: JAMEA, type: 'PERIODIC' as const, hasCycles: false, sortOrder: 2 },
-      {
-        key: CAMPAIGN,
-        type: 'TEMPORARY' as const,
-        hasCycles: false,
-        sortOrder: 3,
-      },
+      { key: MWA, type: 'PERIODIC' as const, sortOrder: 1 },
+      { key: JAMEA, type: 'PERIODIC' as const, sortOrder: 2 },
+      { key: CAMPAIGN, type: 'TEMPORARY' as const, sortOrder: 3 },
     ];
     for (const program of wanted) {
       const found = await prisma.program.findFirst({
@@ -373,7 +369,6 @@ async function main() {
           data: {
             name: program.key,
             type: program.type,
-            hasCycles: program.hasCycles,
             sortOrder: program.sortOrder,
           },
         });
@@ -384,8 +379,9 @@ async function main() {
       }
     }
 
-    // Cycles — current only when the program has none.
-    for (const key of ['fund', MWA]) {
+    // Cycles — every periodic program runs in one; current only when the
+    // program has none.
+    for (const key of ['fund', MWA, JAMEA]) {
       const programId = programs.get(key);
       const current = programId
         ? await prisma.cycle.findFirst({
@@ -524,15 +520,13 @@ async function main() {
       if (contributor.jamea !== undefined && jamea) {
         for (const { year, month } of paidMonths()) {
           if (random() < 0.15) continue;
-          const day = String(3 + Math.floor(random() * 6)).padStart(2, '0');
-          const date = `${year}-${String(month).padStart(2, '0')}-${day}`;
           payments.push({
             programId: jamea,
             contributorId,
-            amount: money(contributor.jamea),
             year,
-            paymentDate: new Date(`${date}T00:00:00.000Z`),
-            idempotencyKey: `seed-demo:${JAMEA}:${contributor.accountNumber}:${date}`,
+            month,
+            isStarred: false,
+            amount: money(contributor.jamea),
           });
         }
       }

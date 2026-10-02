@@ -1,5 +1,6 @@
 import { Prisma } from '../../../generated/prisma/client';
 import type { PrismaService } from '../../prisma/prisma.service';
+import type { EradatArrearsService } from '../eradat-arrears.service';
 import { EradatSummaryService } from '../eradat-summary.service';
 import type { EradatWindowService } from '../eradat-window.service';
 
@@ -78,15 +79,16 @@ const FUND_WINDOW = {
     id: 'fund',
     name: 'اشتراكات الصندوق',
     type: 'PERIODIC' as const,
-    hasCycles: true,
     isProtected: true,
     sortOrder: 0,
+    hasCycles: true,
     entryMode: 'MONTHLY' as const,
     currentCycle: null,
   },
   cycle: null,
   year: 2026,
   years: [2026, 2027, 2028, 2029],
+  runningYears: [2026, 2027, 2028, 2029],
 };
 
 describe('EradatSummaryService', () => {
@@ -100,11 +102,19 @@ describe('EradatSummaryService', () => {
     raw: { program: { findMany: jest.fn() } },
   };
   const mockWindow = { resolve: jest.fn() };
+  const mockArrears = { loadArrears: jest.fn() };
   let service: EradatSummaryService;
 
   beforeEach(() => {
     jest.resetAllMocks();
     mockWindow.resolve.mockResolvedValue(FUND_WINDOW);
+    mockArrears.loadArrears.mockResolvedValue({
+      monthsDue: 9,
+      behind: new Map([
+        ['e1', d(4500)],
+        ['e2', d(250.5)],
+      ]),
+    });
     mockPrisma.programEnrollment.aggregate.mockResolvedValue({
       _sum: { expectedRate: d(12000), previousSubscription: d(5000) },
     });
@@ -118,7 +128,35 @@ describe('EradatSummaryService', () => {
     service = new EradatSummaryService(
       mockPrisma as unknown as PrismaService,
       mockWindow as unknown as EradatWindowService,
+      mockArrears as unknown as EradatArrearsService,
     );
+  });
+
+  it('reports how many are behind on the year and the total عجز — the list the grid filter shows', async () => {
+    groupBy.mockImplementation(fakeGroupBy([]));
+
+    const summary = await service.getSummary('fund', { year: 2026 });
+
+    expect(mockArrears.loadArrears).toHaveBeenCalledWith('fund', 2026);
+    expect(summary.arrears).toEqual({
+      monthsDue: 9,
+      count: 2,
+      total: '4750.50',
+    });
+  });
+
+  it('has no arrears on a temporary program, which keeps no pledges', async () => {
+    mockWindow.resolve.mockResolvedValue({
+      ...FUND_WINDOW,
+      program: { ...FUND_WINDOW.program, id: 'camp', entryMode: 'DATED' },
+      years: [2026],
+    });
+    groupBy.mockImplementation(fakeGroupBy([]));
+
+    const summary = await service.getSummary('camp', { year: 2026 });
+
+    expect(summary.arrears).toBeNull();
+    expect(mockArrears.loadArrears).not.toHaveBeenCalled();
   });
 
   it('never counts money the fund paid out as fund revenue or toward its ratio', async () => {
@@ -274,5 +312,44 @@ describe('EradatSummaryService', () => {
       entryCount: 0,
     });
     expect(summary.running.enrolledRunningTotal).toBe('6200.00'); // 5000 previous + 1200
+  });
+
+  it('keeps earlier cycles in the running totals after a new cycle becomes current', async () => {
+    mockWindow.resolve.mockResolvedValue({
+      ...FUND_WINDOW,
+      year: 2030,
+      years: [2030, 2031, 2032],
+      runningYears: [2026, 2027, 2028, 2029, 2030, 2031, 2032],
+    });
+    groupBy.mockImplementation(
+      fakeGroupBy([
+        // Paid in the previous cycle.
+        {
+          programId: 'fund',
+          payer: 'contributor',
+          year: 2027,
+          month: 3,
+          amount: 6000,
+        },
+        // Paid in the current one.
+        {
+          programId: 'fund',
+          payer: 'contributor',
+          year: 2030,
+          month: 1,
+          amount: 500,
+        },
+      ]),
+    );
+
+    const summary = await service.getSummary('fund', { year: 2030 });
+
+    // 5000 typed previous + 6000 from 2027 + 500 from 2030.
+    expect(summary.running.enrolledRunningTotal).toBe('11500.00');
+    expect(summary.running.revenueRunningTotal).toBe('11500.00');
+    // The year cards stay on the current cycle.
+    expect(summary.yearTotals.map((entry) => entry.year)).toEqual([
+      2030, 2031, 2032,
+    ]);
   });
 });

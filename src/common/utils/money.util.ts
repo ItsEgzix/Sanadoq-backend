@@ -18,6 +18,15 @@ export function toMoneyString(
   return (value ?? ZERO).toFixed(MONEY_SCALE);
 }
 
+/**
+ * To the money scale, halves away from zero — for a figure the server derives
+ * rather than sums (a pledge's share of a year), so it compares and displays
+ * at the precision every stored amount has.
+ */
+export function roundMoney(value: Prisma.Decimal): Prisma.Decimal {
+  return value.toDecimalPlaces(MONEY_SCALE, Prisma.Decimal.ROUND_HALF_UP);
+}
+
 export function toRatioString(value: Prisma.Decimal | null): string | null {
   return value === null ? null : value.toFixed(RATIO_SCALE);
 }

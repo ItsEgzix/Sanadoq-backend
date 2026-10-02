@@ -76,9 +76,14 @@ top of `src/prisma/prisma.service.ts`. Keep both in mind when adding a read.
 
 ## How the books work
 
-- **Entry mode.** A `PERIODIC` program with cycles keeps the monthly grid of
-  the workbook (one cell per payer per month, ★ = paid but recorded under
-  another month, counts 0). Every other program keeps a dated ledger.
+- **Program types.** A `PERIODIC` program (the fund's membership, مواساة) is a
+  standing subscription: it always runs in cycles, its subscribers carry from
+  one cycle into the next, and it keeps the monthly grid of the workbook (one
+  cell per payer per month, ★ = paid but recorded under another month, counts
+  0). A `TEMPORARY` program is one need collected once — someone in hospital,
+  this Ramadan's families — with no cycles and a dated ledger of gifts. There
+  is no separate cycle switch: `runsInCycles()` in `src/programs/program.util.ts`
+  reads the type.
 - **Payers.** Exactly one of: an enrolled contributor, another program, or a
   free-text name — enforced by a CHECK. A contributor payer must be enrolled in the
   receiving program — enforced by a composite foreign key.
@@ -90,6 +95,20 @@ top of `src/prisma/prisma.service.ts`. Keep both in mind when adding a read.
 - **Collection ratio** is per program: the sum of its enrollments' pledges ÷
   that year's payments by enrolled contributors. Transfers and one-off gifts are
   revenue but answer no pledge, so they stay out of the ratio.
+- **Running totals (الإجمالي)** are the typed previous subscription (paid
+  before this system held the books) plus every payment from the program's
+  first cycle through the current one, so totals never drop when a new cycle
+  becomes current and nobody re-types الاشتراك السابق per cycle.
+- **Reshaping a cycle** never deletes payments. Shortening is refused when it
+  would cut years that hold payments, move this year out of the current
+  cycle, or leave a year between two cycles; the split route covers all three
+  by starting the next cycle with the cut years.
+- **Arrears (العجز)** are per periodic program and per year: an active
+  subscriber's yearly pledge ÷ 12 × the months of that year that have ended,
+  less what they paid in it. A month is owed once it is over; each January
+  starts from zero; dormant enrollments are never listed. `arrears()` in
+  `revenue.util.ts` is the rule, and `EradatArrearsService` feeds both
+  `GET …/lines?behind=true` and the summary's `arrears` count and total.
 - **Duplicates are never merged automatically.** Saving a contributor, and
   `POST /contributors/duplicates/scan`, raise review flags; a reviewer merges or
   dismisses each one. Merging moves the other record's enrollments (and, by
@@ -105,7 +124,7 @@ top of `src/prisma/prisma.service.ts`. Keep both in mind when adding a read.
 | `POST /auth/login`, `/auth/refresh`, `/auth/logout`, `/auth/password`; `GET /auth/me`                         | Session                                             |
 | `GET/POST /users`, `PATCH /users/:id`, `POST /users/:id/password`                                             | Accounts                                            |
 | `GET/POST /programs`, `GET/PATCH/DELETE /programs/:id`                                                        | Programs (the protected one refuses delete/reshape) |
-| `GET/POST …/:id/cycles`, `GET …/cycles/current`, `PATCH …/cycles/:cid`, `POST …/cycles/:cid/activate`         | A program's cycles                                  |
+| `GET/POST …/:id/cycles`, `GET …/cycles/current`, `PATCH …/cycles/:cid`, `POST …/cycles/:cid/split`, `POST …/cycles/:cid/activate` | A program's cycles; split = shorten + start the next one |
 | `GET/POST …/:id/enrollments`, `PATCH/DELETE …/enrollments/:eid`, `POST …/enrollments/:eid/mark-dormant`       | Enrollments                                         |
 | `PUT/DELETE …/:id/cells/contributors/:contributorId/:year/:month`                                             | A contributor's grid cell                           |
 | `PUT/DELETE …/:id/cells/programs/:payerProgramId/:year/:month`                                                | Another program's grid cell                         |

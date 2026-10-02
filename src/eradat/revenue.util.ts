@@ -1,5 +1,10 @@
 import type { Prisma } from '../../generated/prisma/client';
-import { sumMoney, toMoneyString, ZERO } from '../common/utils/money.util';
+import {
+  roundMoney,
+  sumMoney,
+  toMoneyString,
+  ZERO,
+} from '../common/utils/money.util';
 import type { PaymentCellRow } from '../payments/payment.constant';
 import { toPaymentCellView } from '../payments/payment.util';
 
@@ -31,17 +36,18 @@ export function yearlyTotal(
 }
 
 /**
- * running_total(enrollment) = previous_subscription + SUM(yearly_total) over
- * the program's window — the years of its current cycle, or every year with
- * payments for a program without cycles. previous_subscription is the
- * treasurer's typed figure for everything before that window — never
- * recomputed here.
+ * running_total(enrollment) — الإجمالي — = previous_subscription +
+ * SUM(yearly_total) over the program's running years: every cycle from its
+ * first through the current one, or every year with payments for a program
+ * without cycles (see ReadWindow.runningYears). previous_subscription is the
+ * treasurer's typed figure for what was paid before this system held the
+ * books — never recomputed, and never re-typed when a new cycle starts.
  */
 export function runningTotal(
   previousSubscription: Prisma.Decimal,
-  windowYearlyTotals: readonly Prisma.Decimal[],
+  yearlyTotals: readonly Prisma.Decimal[],
 ): Prisma.Decimal {
-  return previousSubscription.plus(sumMoney(windowYearlyTotals));
+  return previousSubscription.plus(sumMoney(yearlyTotals));
 }
 
 /**
@@ -67,6 +73,44 @@ export function collectionRatio(
   return expectedTotal.dividedBy(pledgedActualTotal);
 }
 
+/**
+ * months_due(year, now) = how many of the year's months have ended by `now`:
+ * 12 for a past year, 0 for a future one, and for the current year the
+ * months before this one. A month is owed once it is over, not on its first
+ * day — the fund's rule (2026-10-02), so on 2 October a member is measured
+ * through September.
+ *
+ * UTC, like CycleService's default year: the fund keeps no time zone, and the
+ * difference is a few hours at the turn of a month.
+ */
+export function monthsDue(year: number, now: Date): number {
+  const thisYear = now.getUTCFullYear();
+  if (year < thisYear) return 12;
+  if (year > thisYear) return 0;
+  return now.getUTCMonth(); // 0-based, so this counts the months already over
+}
+
+/**
+ * arrears(enrollment, year) — العجز — = the yearly pledge's share for the
+ * months due, less what the enrollment paid in that year; never below zero.
+ *
+ * The fund's rule (2026-10-02): one year at a time, so each January starts
+ * from zero and an unpaid 2026 is not carried into 2027. Measured in money,
+ * not in empty cells: a ★ month adds nothing here because its money sits in
+ * the month it was booked under, and a quarterly or annual lump covers the
+ * months it was meant for. Paying ahead of the months due is not a negative
+ * arrears — it is simply none.
+ */
+export function arrears(
+  expectedRate: Prisma.Decimal,
+  dueMonths: number,
+  paidInYear: Prisma.Decimal,
+): Prisma.Decimal {
+  const owed = roundMoney(expectedRate.times(dueMonths).dividedBy(12));
+  const short = owed.minus(paidInYear);
+  return short.greaterThan(0) ? short : ZERO;
+}
+
 /** The twelve cells of one year, January first; null where nothing was entered. */
 export function monthRow<T extends { year: number; month: number | null }>(
   cells: readonly T[],
@@ -81,15 +125,19 @@ export function monthRow<T extends { year: number; month: number | null }>(
 
 /**
  * One line of a monthly grid for `year`: its twelve cells, that year's
- * total, every window year's total and the running total. Transfer lines
- * (another program paying in) pass zero for previousSubscription — a
- * program's own opening balance is not split across its payers.
+ * total, every window year's total and the running total.
+ *
+ * openingTotal is what the running total starts from before the current
+ * cycle's cells: an enrollment's previous subscription plus what it paid in
+ * the program's earlier cycles. Transfer lines (another program paying in)
+ * start from their earlier cycles only — a program's own opening balance is
+ * not split across its payers.
  */
 export function buildGridLine(
   cells: readonly PaymentCellRow[],
   windowYears: readonly number[],
   year: number,
-  previousSubscription: Prisma.Decimal,
+  openingTotal: Prisma.Decimal,
 ) {
   const totals = new Map(
     windowYears.map((windowYear) => [
@@ -101,7 +149,7 @@ export function buildGridLine(
     months: monthRow(cells, year).map(
       (cell) => cell && toPaymentCellView(cell),
     ),
-    ...summariseYears(totals, windowYears, year, previousSubscription),
+    ...summariseYears(totals, windowYears, year, openingTotal),
   };
 }
 
@@ -130,7 +178,7 @@ function summariseYears(
   totals: ReadonlyMap<number, Prisma.Decimal>,
   windowYears: readonly number[],
   year: number,
-  previousSubscription: Prisma.Decimal,
+  openingTotal: Prisma.Decimal,
 ) {
   const yearTotals = windowYears.map((windowYear) => ({
     year: windowYear,
@@ -144,7 +192,7 @@ function summariseYears(
     })),
     runningTotal: toMoneyString(
       runningTotal(
-        previousSubscription,
+        openingTotal,
         yearTotals.map((entry) => entry.total),
       ),
     ),

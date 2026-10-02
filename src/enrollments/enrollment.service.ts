@@ -53,14 +53,20 @@ export class EnrollmentService {
    * payment cells. Does not check the program: callers resolve it, usually
    * in parallel with this.
    */
+  // onlyIds narrows the page to enrollments a caller already picked — the
+  // grid's "behind" filter, whose rule needs payments Prisma cannot compare
+  // against a pledge in one query. The order and cursor stay the same, so
+  // paging a filtered grid works like paging the whole one.
   async listEnrollmentPage(
     programId: string,
     { cursor, limit, status, q }: ListEnrollmentsQueryDto,
+    onlyIds?: readonly string[],
   ): Promise<{ rows: EnrollmentFieldsRow[]; nextCursor: string | null }> {
     // One extra row says whether another page exists without a count().
     const found = await this.prisma.programEnrollment.findMany({
       where: {
         programId,
+        ...(onlyIds ? { id: { in: [...onlyIds] } } : {}),
         ...(status ? { status } : {}),
         ...(q ? { contributor: this.buildContributorSearch(q) } : {}),
       },

@@ -24,10 +24,11 @@
  *                     subscription and status. Soft-deleted members are
  *                     skipped.
  *   member cells    → monthly cells of the fund program, ★ kept as ★.
- *   ProjectAccount  → a Program running without cycles (a dated ledger).
- *   project cells   → one dated entry per filled month, on the 1st, from the
- *                     free-text payer below: the old rows were monthly totals
- *                     with no payer recorded, and the new books never invent one.
+ *   ProjectAccount  → NOT copied, only listed. A standing program is
+ *   project cells     PERIODIC, so it keeps a monthly grid, and every grid
+ *                     cell needs a payer. The old rows were monthly totals
+ *                     with no payer recorded, and the new books never invent
+ *                     one. A reviewer enters them by hand if they matter.
  *   current Cycle   → the fund program's current cycle, if it has none.
  *
  * Re-runnable: every write dedupes on a unique key (account number,
@@ -48,8 +49,6 @@ const APPLY = process.argv.includes('--apply');
 const BATCH = 500;
 // The serial part of YYMMNNN; an old serial past this does not fit.
 const MAX_SERIAL = 999;
-// Who "paid" an old project total. Honest about what the old row was.
-const PROJECT_TOTAL_PAYER = 'إجمالي شهري منقول من الكشف القديم';
 
 interface LegacyMember {
   id: string;
@@ -232,36 +231,18 @@ async function main() {
     }
     const fundWindow = current ?? legacy.cycle;
 
-    // ── Project accounts → ledger programs ──
-    const programOfProject = new Map<string, string>();
+    // ── Project accounts — listed, never copied (see the mapping above) ──
     for (const project of legacy.projects) {
-      const existing = await prisma.program.findFirst({
-        where: { name: project.name, isDeleted: false },
-        select: { id: true, type: true, hasCycles: true },
-      });
-      if (existing && existing.type === 'PERIODIC' && existing.hasCycles) {
-        // A monthly-grid program of that name already exists; its cells need a
-        // payer, which the old totals do not have. A reviewer must decide.
-        console.log(
-          `Program ${project.name}: exists as a monthly grid — its old totals are NOT copied`,
-        );
-        continue;
-      }
+      const cells = legacy.cells.filter(
+        (cell) => cell.projectAccountId === project.id,
+      ).length;
       console.log(
-        `Program ${project.name}: ${existing ? 'exists (ledger)' : 'create as a ledger program'}`,
+        `Program ${project.name}: ${cells} old monthly totals with no payer — NOT copied`,
       );
-      if (existing) programOfProject.set(project.id, existing.id);
-      else if (APPLY) {
-        const created = await prisma.program.create({
-          data: { name: project.name, type: 'PERIODIC', hasCycles: false },
-        });
-        programOfProject.set(project.id, created.id);
-      } else programOfProject.set(project.id, `planned:${project.id}`);
     }
 
-    // ── Cells ──
+    // ── Member cells → the fund's grid ──
     const payments: Prisma.PaymentCreateManyInput[] = [];
-    let skippedStars = 0;
     for (const cell of legacy.cells) {
       if (cell.memberId) {
         const contributorId = contributorOfMember.get(cell.memberId);
@@ -274,29 +255,10 @@ async function main() {
           isStarred: cell.type === 'STARRED',
           amount: cell.type === 'STARRED' ? null : cell.amount,
         });
-      } else if (cell.projectAccountId) {
-        const programId = programOfProject.get(cell.projectAccountId);
-        if (!programId) continue;
-        // A ★ on an aggregate line points at another month's total; a ledger
-        // has no months to point at, and the star carries no money anyway.
-        if (cell.type === 'STARRED') {
-          skippedStars++;
-          continue;
-        }
-        const date = `${cell.year}-${String(cell.month).padStart(2, '0')}-01`;
-        payments.push({
-          programId,
-          payerNameFreetext: PROJECT_TOTAL_PAYER,
-          amount: cell.amount,
-          year: cell.year,
-          paymentDate: new Date(`${date}T00:00:00.000Z`),
-          idempotencyKey: `legacy-eradat:${cell.id}`,
-        });
       }
     }
     console.log(
-      `Payments: ${payments.length} planned (${payments.filter((p) => p.isStarred).length} ★)` +
-        (skippedStars ? `; ${skippedStars} ★ on project lines skipped` : ''),
+      `Payments: ${payments.length} planned (${payments.filter((p) => p.isStarred).length} ★)`,
     );
     // Copied as they are, but the fund's books open on its current cycle;
     // cells outside it stay invisible until a cycle covering them is current.

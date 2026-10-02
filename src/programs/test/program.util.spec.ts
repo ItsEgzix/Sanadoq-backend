@@ -1,24 +1,36 @@
-import { programEntryMode, toProgramView } from '../program.util';
+import { programEntryMode, runsInCycles, toProgramView } from '../program.util';
 
 describe('program.util', () => {
+  // Type alone decides both: there is no third shape, so a periodic program
+  // never falls back to a ledger and a temporary one never gets a cycle.
   it.each([
     ['PERIODIC', true, 'MONTHLY'], // the fund, مواساة
-    ['PERIODIC', false, 'DATED'], // continuous flow, no cycle boundary
-    ['TEMPORARY', true, 'DATED'], // a campaign with its own window
-    ['TEMPORARY', false, 'DATED'], // a one-off campaign
+    ['TEMPORARY', false, 'DATED'], // a hospital case, this Ramadan's families
   ] as const)(
-    'a %s program with hasCycles=%s keeps a %s book',
-    (type, hasCycles, mode) => {
-      expect(programEntryMode({ type, hasCycles })).toBe(mode);
+    'a %s program runs in cycles: %s, and keeps a %s book',
+    (type, cycles, mode) => {
+      expect(runsInCycles({ type })).toBe(cycles);
+      expect(programEntryMode({ type })).toBe(mode);
     },
   );
+
+  it('derives hasCycles in the view from type, so clients never send or store it', () => {
+    const view = toProgramView({
+      id: 'camp',
+      name: 'حملة رمضان',
+      type: 'TEMPORARY',
+      isProtected: false,
+      sortOrder: 1,
+      cycles: [],
+    });
+    expect(view).toMatchObject({ hasCycles: false, entryMode: 'DATED' });
+  });
 
   it('spells out the current cycle with its years, or null when there is none', () => {
     const base = {
       id: 'p',
       name: 'x',
       type: 'PERIODIC' as const,
-      hasCycles: true,
       isProtected: false,
       sortOrder: 0,
     };

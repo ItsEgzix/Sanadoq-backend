@@ -13,7 +13,6 @@ export const PROGRAM_FIELDS_SELECT = {
   id: true,
   name: true,
   type: true,
-  hasCycles: true,
   isProtected: true,
   sortOrder: true,
 } satisfies Prisma.ProgramSelect;

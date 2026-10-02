@@ -3,6 +3,7 @@ import {
   cycleEndYear,
   cycleYears,
   isYearInCycle,
+  removedYears,
 } from '../cycle.util';
 
 describe('cycle.util', () => {
@@ -32,5 +33,16 @@ describe('cycle.util', () => {
     expect(clampYearToCycle(cycle, 2027)).toBe(2027);
     expect(clampYearToCycle(cycle, 2031)).toBe(2029);
     expect(clampYearToCycle(cycle, 2020)).toBe(2026);
+  });
+
+  it('lists the years a change takes out of a cycle, from either end', () => {
+    const cycle = { startYear: 2026, endYear: 2029 };
+    expect(removedYears(cycle, { startYear: 2026, endYear: 2027 })).toEqual([
+      2028, 2029,
+    ]); // shortened
+    expect(removedYears(cycle, { startYear: 2027, endYear: 2030 })).toEqual([
+      2026,
+    ]); // moved later
+    expect(removedYears(cycle, { startYear: 2026, endYear: 2031 })).toEqual([]); // extended
   });
 });

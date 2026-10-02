@@ -28,7 +28,6 @@ const program = (overrides: Record<string, unknown> = {}) => ({
   id: 'fund',
   name: 'اشتراكات الصندوق',
   type: 'PERIODIC',
-  hasCycles: true,
   isProtected: true,
   sortOrder: 0,
   cycles: [CYCLE_2026],
@@ -73,9 +72,9 @@ describe('CycleService', () => {
       });
     });
 
-    it('accepts any year for a program without cycles — there is no boundary', async () => {
+    it('accepts any year for a temporary program — it has no cycle to fence it', async () => {
       mockProgramService.assertProgramExists.mockResolvedValue(
-        program({ hasCycles: false, type: 'TEMPORARY', cycles: [] }),
+        program({ type: 'TEMPORARY', isProtected: false, cycles: [] }),
       );
       const window = await service.resolveWindow('camp', 2015);
       expect(window).toMatchObject({ cycle: null, year: 2015 });
@@ -132,9 +131,9 @@ describe('CycleService', () => {
       expect(mockPrisma.cycle.create).not.toHaveBeenCalled();
     });
 
-    it('refuses a program that runs without cycles', async () => {
+    it('refuses a temporary program — one need, collected once, never has a cycle', async () => {
       mockProgramService.assertProgramExists.mockResolvedValue(
-        program({ hasCycles: false, cycles: [] }),
+        program({ type: 'TEMPORARY', isProtected: false, cycles: [] }),
       );
       await expect(
         service.createCycle('camp', { startYear: 2026, lengthYears: 1 }),
@@ -192,6 +191,183 @@ describe('CycleService', () => {
       const demote = mockPrisma.cycle.updateMany.mock.invocationCallOrder[0];
       const promote = mockPrisma.cycle.update.mock.invocationCallOrder[0];
       expect(demote).toBeLessThan(promote);
+    });
+  });
+
+  describe('the guards on reshaping a cycle', () => {
+    afterEach(() => jest.useRealTimers());
+
+    it('refuses to move this year out of the current cycle — collectors could not record it', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2027-05-01T00:00:00Z'));
+      mockPrisma.cycle.findFirst.mockResolvedValueOnce(CYCLE_2026);
+
+      await expect(
+        service.updateCycle('fund', 'c-2026', { lengthYears: 1 }),
+      ).rejects.toMatchObject({
+        errorCode: 'CYCLE_CURRENT_DROPS_THIS_YEAR',
+        meta: { year: 2027 },
+      });
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('refuses to leave a year between two cycles, belonging to neither', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-02T00:00:00Z'));
+      mockPrisma.cycle.findFirst
+        .mockResolvedValueOnce(CYCLE_2026) // findCycleOrThrow
+        .mockResolvedValueOnce(null); // no overlap
+      mockPrisma.payment.count.mockResolvedValue(0);
+      mockPrisma.cycle.findMany.mockResolvedValue([
+        { startYear: 2030, endYear: 2032 }, // the next cycle, already set up
+      ]);
+
+      await expect(
+        service.updateCycle('fund', 'c-2026', { lengthYears: 3 }),
+      ).rejects.toMatchObject({
+        errorCode: 'CYCLE_LEAVES_GAP',
+        meta: { years: '2029' },
+      });
+      expect(mockPrisma.cycle.update).not.toHaveBeenCalled();
+    });
+
+    it('lets the far end go when no cycle follows and nothing is paid there', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-02T00:00:00Z'));
+      mockPrisma.cycle.findFirst
+        .mockResolvedValueOnce(CYCLE_2026)
+        .mockResolvedValueOnce(null);
+      mockPrisma.payment.count.mockResolvedValue(0);
+      mockPrisma.cycle.findMany.mockResolvedValue([]);
+      mockPrisma.cycle.update.mockResolvedValue({
+        ...CYCLE_2026,
+        lengthYears: 3,
+        endYear: 2028,
+      });
+
+      const result = await service.updateCycle('fund', 'c-2026', {
+        lengthYears: 3,
+      });
+
+      expect(result).toMatchObject({ endYear: 2028 });
+    });
+  });
+
+  describe('splitCycle', () => {
+    afterEach(() => jest.useRealTimers());
+
+    const splitInto = (kept: number, next: number, current = true) => {
+      mockPrisma.cycle.findFirst
+        .mockResolvedValueOnce({ ...CYCLE_2026, isCurrent: current })
+        .mockResolvedValueOnce(null); // no overlap
+      mockPrisma.payment.count.mockResolvedValue(0);
+      mockPrisma.cycle.findMany.mockResolvedValue([]);
+      mockPrisma.cycle.update.mockImplementation(
+        ({ data }: { data: Record<string, unknown> }) =>
+          Promise.resolve({ ...CYCLE_2026, isCurrent: current, ...data }),
+      );
+      mockPrisma.cycle.create.mockImplementation(
+        ({ data }: { data: Record<string, unknown> }) =>
+          Promise.resolve({ id: 'c-next', ...data }),
+      );
+      return service.splitCycle('fund', 'c-2026', {
+        lengthYears: kept,
+        nextLengthYears: next,
+      });
+    };
+
+    it('shortens the cycle and starts the next one the year after, keeping this one current', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-02T00:00:00Z'));
+
+      const result = await splitInto(2, 2);
+
+      expect(mockPrisma.cycle.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'c-2026' },
+          data: { lengthYears: 2, endYear: 2027 },
+        }),
+      );
+      expect(mockPrisma.cycle.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: {
+            programId: 'fund',
+            startYear: 2028,
+            lengthYears: 2,
+            endYear: 2029,
+            isCurrent: false,
+          },
+        }),
+      );
+      // The cut years count as kept: the new cycle takes their payments.
+      const { where } = mockPrisma.payment.count.mock.calls[0][0];
+      expect(where.OR).toEqual([
+        { year: { lt: 2026 } },
+        { year: { gt: 2029 } },
+      ]);
+      expect(result).toMatchObject({
+        startYear: 2026,
+        endYear: 2027,
+        nextStartYear: 2028,
+        nextEndYear: 2029,
+        successCode: 'CYCLE_SPLIT_SUCCESS',
+      });
+      // Shrink before insert, or the overlap exclusion would refuse it.
+      expect(mockPrisma.cycle.update.mock.invocationCallOrder[0]).toBeLessThan(
+        mockPrisma.cycle.create.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('makes the new cycle current when this year falls in it, demoting the old one first', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2028-03-01T00:00:00Z'));
+
+      await splitInto(2, 3);
+
+      expect(mockPrisma.cycle.update.mock.calls[0][0].data).toEqual({
+        lengthYears: 2,
+        endYear: 2027,
+        isCurrent: false,
+      });
+      expect(mockPrisma.cycle.create.mock.calls[0][0].data).toMatchObject({
+        startYear: 2028,
+        endYear: 2030,
+        isCurrent: true,
+      });
+    });
+
+    it('never makes the new cycle current when the split cycle was not current', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2028-03-01T00:00:00Z'));
+
+      await splitInto(2, 2, false);
+
+      expect(mockPrisma.cycle.create.mock.calls[0][0].data.isCurrent).toBe(
+        false,
+      );
+    });
+
+    it('refuses a length that is not shorter, writing nothing', async () => {
+      mockPrisma.cycle.findFirst.mockResolvedValueOnce(CYCLE_2026);
+
+      await expect(
+        service.splitCycle('fund', 'c-2026', {
+          lengthYears: 4,
+          nextLengthYears: 3,
+        }),
+      ).rejects.toMatchObject({ errorCode: 'CYCLE_SPLIT_NOT_SHORTER' });
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('still refuses when the new cycle is too short to take every payment cut off', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-02T00:00:00Z'));
+      mockPrisma.cycle.findFirst
+        .mockResolvedValueOnce(CYCLE_2026)
+        .mockResolvedValueOnce(null);
+      mockPrisma.payment.count.mockResolvedValue(3); // payments in 2029
+
+      await expect(
+        service.splitCycle('fund', 'c-2026', {
+          lengthYears: 2,
+          nextLengthYears: 1,
+        }),
+      ).rejects.toMatchObject({ errorCode: 'CYCLE_RANGE_STRANDS_PAYMENTS' });
+      expect(mockPrisma.cycle.update).not.toHaveBeenCalled();
+      expect(mockPrisma.cycle.create).not.toHaveBeenCalled();
     });
   });
 });

@@ -9,6 +9,7 @@ import {
 import type { EntryMode } from '../programs/program.util';
 import { PrismaService } from '../prisma/prisma.service';
 import type { EradatYearQueryDto } from './dto/eradat-year-query.dto';
+import { EradatArrearsService } from './eradat-arrears.service';
 import { EradatWindowService } from './eradat-window.service';
 import { collectionRatio, runningTotal } from './revenue.util';
 
@@ -65,13 +66,14 @@ export class EradatSummaryService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly windowService: EradatWindowService,
+    private readonly arrearsService: EradatArrearsService,
   ) {}
 
   async getSummary(programId: string, { year: requested }: EradatYearQueryDto) {
     const window = await this.windowService.resolve(programId, requested);
-    const { program, year, years } = window;
+    const { program, year, years, runningYears } = window;
 
-    const [pledges, statusCounts, yearTotals, months, transfersOut] =
+    const [pledges, statusCounts, yearTotals, months, transfersOut, owing] =
       await Promise.all([
         this.prisma.programEnrollment.aggregate({
           where: { programId },
@@ -82,14 +84,22 @@ export class EradatSummaryService {
           where: { programId },
           _count: { _all: true },
         }),
-        this.loadYearTotals(programId, years),
+        // Over the running years, which hold the window's years too.
+        this.loadYearTotals(programId, runningYears),
         this.loadMonthTotals(programId, year, program.entryMode),
         this.loadTransfersOut(programId, year),
+        // Only a periodic program has pledges to fall behind on.
+        program.entryMode === 'MONTHLY'
+          ? this.arrearsService.loadArrears(programId, year)
+          : null,
       ]);
 
     const selected = yearTotals.get(year) ?? emptyKindTotals();
     const windowTotals = years.map(
       (windowYear) => yearTotals.get(windowYear) ?? emptyKindTotals(),
+    );
+    const runningTotals = runningYears.map(
+      (runningYear) => yearTotals.get(runningYear) ?? emptyKindTotals(),
     );
     // Dormant enrollments still count toward expected: their pledge stands
     // until the fund confirms otherwise (an open question).
@@ -107,6 +117,12 @@ export class EradatSummaryService {
         enrollments: countOf('ACTIVE') + countOf('DORMANT'),
         active: countOf('ACTIVE'),
         dormant: countOf('DORMANT'),
+      },
+      // العجز for the year: the same list the grid's "behind" filter shows.
+      arrears: owing && {
+        monthsDue: owing.monthsDue,
+        count: owing.behind.size,
+        total: toMoneyString(sumMoney([...owing.behind.values()])),
       },
       collection: {
         expectedTotal: toMoneyString(expectedTotal),
@@ -129,15 +145,16 @@ export class EradatSummaryService {
       running: {
         previousSubscriptionTotal: toMoneyString(previousSubscriptionTotal),
         // Summing every enrollment's running total gives the same figure,
-        // since each is its previous subscription plus its window payments.
+        // since each is its previous subscription plus its payments over the
+        // running years.
         enrolledRunningTotal: toMoneyString(
           runningTotal(
             previousSubscriptionTotal,
-            windowTotals.map((totals) => totals.enrolled),
+            runningTotals.map((totals) => totals.enrolled),
           ),
         ),
         revenueRunningTotal: toMoneyString(
-          runningTotal(previousSubscriptionTotal, windowTotals.map(kindTotal)),
+          runningTotal(previousSubscriptionTotal, runningTotals.map(kindTotal)),
         ),
       },
     };

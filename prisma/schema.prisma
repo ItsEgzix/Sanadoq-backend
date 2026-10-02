@@ -7,7 +7,7 @@
 //                    ContributorDuplicateFlag review queue
 //   3. Programs      Program — every revenue stream (the fund's membership,
 //                    مواساة, جامع السعيد, each campaign) is a row here — and
-//                    its own Cycle rows when it has cycles
+//                    a periodic program's own Cycle rows
 //   4. Enrollment    ProgramEnrollment — a Contributor's participation in one
 //                    Program: a subscription with its pledge in a PERIODIC
 //                    program, a pledge-free donor row in a TEMPORARY one
@@ -22,9 +22,10 @@
 //     temporary program's donor row comes with their first gift and goes
 //     with their last (EnrollmentService.addDonor / removeDonorIfEmpty).
 //   - A Payment is either a monthly cell (year + month) or a dated entry
-//     (paymentDate, year derived from it). Programs that are PERIODIC with
-//     cycles keep the monthly grid; every other program keeps a dated ledger.
-//     See programEntryMode() in src/programs/program.util.ts.
+//     (paymentDate, year derived from it). A PERIODIC program runs in cycles
+//     and keeps the monthly grid; a TEMPORARY one has no cycles and keeps a
+//     dated ledger. See runsInCycles() and programEntryMode() in
+//     src/programs/program.util.ts.
 //   - Only unstarred payments carry money. A starred cell (★, "paid but booked
 //     under another month") has amount NULL by constraint, so every
 //     SUM(amount) skips it without remembering the rule.
@@ -32,8 +33,8 @@
 //     program only. It is never summed into the payer's revenue: every total
 //     filters on programId, never on payerProgramId.
 //   - Exactly one Program is protected — the fund's membership program, made
-//     by the baseline migration. Its type and hasCycles are frozen and it can
-//     never be deleted: ProgramService enforces this, and the trigger
+//     by the baseline migration. Its type is frozen and it can never be
+//     deleted: ProgramService enforces this, and the trigger
 //     "Program_guard_protected" backs it up against raw SQL.
 //   - Money is Decimal(14, 2) in the fund's single booking currency. Which
 //     currency is not yet confirmed, so no column carries a currency suffix.
@@ -173,8 +174,8 @@ model ContributorDuplicateFlag {
 // ── Programs ───────────────────────────────────────────────────────────────
 
 enum ProgramType {
-  PERIODIC // a standing subscription — the fund's membership, مواساة
-  TEMPORARY // a campaign with an end
+  PERIODIC // a standing subscription in cycles — the fund's membership, مواساة
+  TEMPORARY // one need, collected once — a hospital case, this Ramadan's families
 }
 
 /// Any revenue stream. The fund's membership program is a row like every
@@ -184,10 +185,10 @@ model Program {
   // Unique among live programs, case-insensitively — partial unique index
   // "Program_live_name_key". CHECK "Program_name_not_blank".
   name        String
+  // Also decides cycles: a PERIODIC program always runs in them, a TEMPORARY
+  // one never does (runsInCycles in src/programs/program.util.ts). There is
+  // no separate switch — migration 20261002150000 dropped hasCycles.
   type        ProgramType
-  // Independent of type. True: the program keeps Cycle rows with their own
-  // length. False: continuous flow with no cycle boundary.
-  hasCycles   Boolean
   // True only on the fund's membership program, set by the baseline
   // migration and never by the API. At most one row — partial unique index
   // "Program_single_protected".
@@ -206,7 +207,8 @@ model Program {
   @@index([sortOrder])
 }
 
-/// A program's subscription cycle. Lengths are data, never a constant: the
+/// A periodic program's subscription cycle (temporary programs have none —
+/// CycleService refuses them). Lengths are data, never a constant: the
 /// fund has run 5-year, then 4-year cycles and is weighing 3. endYear is
 /// stored so payment reads can filter `year BETWEEN startYear AND endYear` in
 /// SQL; CHECK "Cycle_end_matches_length" stops it drifting.

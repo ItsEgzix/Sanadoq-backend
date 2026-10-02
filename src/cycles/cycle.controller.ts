@@ -3,12 +3,13 @@ import { PERMISSIONS } from '../auth/auth.constant';
 import { RequirePermission } from '../common/decorators/access.decorator';
 import { CycleService } from './cycle.service';
 import { CreateCycleDto } from './dto/create-cycle.dto';
+import { SplitCycleDto } from './dto/split-cycle.dto';
 import { UpdateCycleDto } from './dto/update-cycle.dto';
 
 /**
  * One program's cycles: list them, read the current one, create, reshape
- * (start year / length) and switch which one is current. Programs without
- * cycles answer PROGRAM_HAS_NO_CYCLES.
+ * (start year / length), split one in two and switch which one is current.
+ * Programs without cycles answer PROGRAM_HAS_NO_CYCLES.
  */
 @RequirePermission(PERMISSIONS.MANAGE_FUND)
 @Controller('programs/:programId/cycles')
@@ -42,6 +43,15 @@ export class CycleController {
     @Body() updateCycleDto: UpdateCycleDto,
   ) {
     return this.cycleService.updateCycle(programId, cycleId, updateCycleDto);
+  }
+
+  @Post(':cycleId/split')
+  async split(
+    @Param('programId') programId: string,
+    @Param('cycleId') cycleId: string,
+    @Body() splitCycleDto: SplitCycleDto,
+  ) {
+    return this.cycleService.splitCycle(programId, cycleId, splitCycleDto);
   }
 
   @Post(':cycleId/activate')

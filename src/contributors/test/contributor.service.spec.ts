@@ -145,17 +145,13 @@ describe('ContributorService', () => {
   });
 
   describe('listContributors with a year', () => {
-    const enrollment = (
-      programId: string,
-      type: string,
-      hasCycles: boolean,
-    ) => ({
+    const enrollment = (programId: string, type: string) => ({
       id: `e-${programId}`,
       programId,
       status: 'ACTIVE',
       expectedRate: new Prisma.Decimal(1200),
       previousSubscription: new Prisma.Decimal(0),
-      program: { name: programId, isProtected: false, type, hasCycles },
+      program: { name: programId, isProtected: false, type },
     });
 
     it('skips the payments read when no one on the page is enrolled', async () => {
@@ -174,8 +170,8 @@ describe('ContributorService', () => {
         {
           ...CONTRIBUTOR,
           enrollments: [
-            enrollment('fund', 'PERIODIC', true),
-            enrollment('ramadan', 'TEMPORARY', false),
+            enrollment('fund', 'PERIODIC'),
+            enrollment('ramadan', 'TEMPORARY'),
           ],
         },
       ]);
@@ -229,7 +225,7 @@ describe('ContributorService', () => {
 
     it('leaves the year off when none was asked for — the enroll picker', async () => {
       mockPrisma.contributor.findMany.mockResolvedValue([
-        { ...CONTRIBUTOR, enrollments: [enrollment('fund', 'PERIODIC', true)] },
+        { ...CONTRIBUTOR, enrollments: [enrollment('fund', 'PERIODIC')] },
       ]);
 
       const result = await service.listContributors({ limit: 8 });

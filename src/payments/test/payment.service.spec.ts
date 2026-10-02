@@ -19,7 +19,6 @@ const MONTHLY_PROGRAM = {
   id: 'fund',
   name: 'اشتراكات الصندوق',
   type: 'PERIODIC',
-  hasCycles: true,
   isProtected: true,
   sortOrder: 0,
   cycles: [CYCLE],
@@ -28,7 +27,6 @@ const DATED_PROGRAM = {
   id: 'camp',
   name: 'حملة',
   type: 'TEMPORARY',
-  hasCycles: false,
   isProtected: false,
   sortOrder: 1,
   cycles: [],
@@ -444,26 +442,6 @@ describe('PaymentService', () => {
       expect(mockPrisma.payment.create).not.toHaveBeenCalled();
     });
 
-    // A periodic program without cycles keeps a ledger too, but it has
-    // subscribers: only the enrolled pay it.
-    it('still requires enrollment in a periodic program that keeps a ledger', async () => {
-      mockProgramService.assertProgramExists.mockResolvedValue({
-        ...DATED_PROGRAM,
-        id: 'jamea',
-        type: 'PERIODIC',
-      });
-      mockEnrollmentService.lookUpContributorPayer.mockResolvedValue({
-        enrolled: false,
-        live: true,
-      });
-
-      await expect(
-        service.recordPayment('u1', 'jamea', GIFT),
-      ).rejects.toMatchObject({ errorCode: 'ENROLLMENT_NOT_FOUND' });
-      expect(mockEnrollmentService.addDonor).not.toHaveBeenCalled();
-      expect(mockPrisma.payment.create).not.toHaveBeenCalled();
-    });
-
     it('refuses a dated entry on a program that keeps a monthly grid', async () => {
       await expect(
         service.recordPayment('u1', 'fund', {
@@ -491,37 +469,21 @@ describe('PaymentService', () => {
       expect(mockPrisma.payment.deleteMany).not.toHaveBeenCalled();
     });
 
-    // A dated program with cycles: the entry's year, read beside the
-    // program, is fenced into the current cycle like a write would be.
-    const DRIVE = {
-      ...DATED_PROGRAM,
-      id: 'drive',
-      hasCycles: true,
-      cycles: [{ ...CYCLE, programId: 'drive' }],
-    };
-
-    it('refuses to remove an entry from outside the current cycle', async () => {
-      mockProgramService.assertProgramExists.mockResolvedValue(DRIVE);
-      mockPrisma.payment.findFirst.mockResolvedValue({ year: 2031 });
-
-      await expect(
-        service.deletePayment('drive', 'pay-1'),
-      ).rejects.toMatchObject({ errorCode: 'CYCLE_YEAR_OUT_OF_RANGE' });
-      expect(mockPrisma.payment.deleteMany).not.toHaveBeenCalled();
-    });
-
-    it('removes an entry inside the current cycle', async () => {
-      mockProgramService.assertProgramExists.mockResolvedValue(DRIVE);
-      mockPrisma.payment.findFirst.mockResolvedValue({ year: 2027 });
+    it('removes an entry from any year — a temporary program has no cycle to fence it', async () => {
+      mockPrisma.payment.findFirst.mockResolvedValue({
+        year: 2031,
+        contributorId: null,
+      });
       mockPrisma.payment.deleteMany.mockResolvedValue({ count: 1 });
 
-      await expect(service.deletePayment('drive', 'pay-1')).resolves.toEqual({
+      await expect(service.deletePayment('camp', 'pay-1')).resolves.toEqual({
         id: 'pay-1',
         successCode: 'PAYMENT_DELETE_SUCCESS',
       });
       expect(mockPrisma.payment.deleteMany).toHaveBeenCalledWith({
-        where: { id: 'pay-1', programId: 'drive' },
+        where: { id: 'pay-1', programId: 'camp' },
       });
+      expect(mockEnrollmentService.removeDonorIfEmpty).not.toHaveBeenCalled();
     });
 
     it('drops the donor row with the last gift of theirs removed from a temporary program', async () => {
@@ -542,23 +504,6 @@ describe('PaymentService', () => {
       ).toBeLessThan(
         mockEnrollmentService.removeDonorIfEmpty.mock.invocationCallOrder[0],
       );
-    });
-
-    it('never touches an enrollment when removing a periodic program’s entry', async () => {
-      mockProgramService.assertProgramExists.mockResolvedValue({
-        ...DATED_PROGRAM,
-        id: 'jamea',
-        type: 'PERIODIC',
-      });
-      mockPrisma.payment.findFirst.mockResolvedValue({
-        year: 2026,
-        contributorId: 'p1',
-      });
-      mockPrisma.payment.deleteMany.mockResolvedValue({ count: 1 });
-
-      await service.deletePayment('jamea', 'pay-1');
-
-      expect(mockEnrollmentService.removeDonorIfEmpty).not.toHaveBeenCalled();
     });
 
     it('answers PAYMENT_NOT_FOUND first for an entry in a program that does not exist', async () => {

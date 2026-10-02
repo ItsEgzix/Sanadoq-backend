@@ -1,10 +1,12 @@
 import { Prisma } from '../../../generated/prisma/client';
 import type { PaymentCellRow } from '../../payments/payment.constant';
 import {
+  arrears,
   buildGridLine,
   buildLedgerLine,
   collectionRatio,
   monthRow,
+  monthsDue,
   runningTotal,
   yearlyTotal,
 } from '../revenue.util';
@@ -135,6 +137,49 @@ describe('revenue.util', () => {
       expect(buildLedgerLine(undefined, [2026], 2026, d(0)).runningTotal).toBe(
         '0.00',
       );
+    });
+  });
+
+  describe('monthsDue', () => {
+    const oct2 = new Date('2026-10-02T09:00:00.000Z');
+
+    it.each([
+      [2025, 12], // a past year is owed in full
+      [2026, 9], // the current year through the last month that ended
+      [2027, 0], // nothing of a future year is owed
+    ])('on 2 October 2026, %i has %i months due', (year, due) => {
+      expect(monthsDue(year, oct2)).toBe(due);
+    });
+
+    it('owes nothing of the current year in January — no month has ended yet', () => {
+      expect(monthsDue(2026, new Date('2026-01-31T23:59:59.000Z'))).toBe(0);
+    });
+
+    it('counts a month once it is over, from the first moment of the next', () => {
+      expect(monthsDue(2026, new Date('2026-03-01T00:00:00.000Z'))).toBe(2);
+      expect(monthsDue(2026, new Date('2026-02-28T23:59:59.000Z'))).toBe(1);
+    });
+  });
+
+  describe('arrears', () => {
+    it('is the pledge share for the months due, less what was paid in the year', () => {
+      // 12,000 a year, 9 months due → 9,000 owed; 6,000 paid.
+      expect(arrears(d(12000), 9, d(6000)).toFixed(2)).toBe('3000.00');
+    });
+
+    it('is zero when paid up, and never negative when paid ahead', () => {
+      expect(arrears(d(12000), 9, d(9000)).toFixed(2)).toBe('0.00');
+      expect(arrears(d(12000), 9, d(12000)).toFixed(2)).toBe('0.00');
+    });
+
+    it('rounds the share to the money scale before comparing', () => {
+      // 1,000 × 1 ÷ 12 = 83.333… → 83.33 owed.
+      expect(arrears(d(1000), 1, d(0)).toFixed(2)).toBe('83.33');
+      expect(arrears(d(1000), 1, d('83.33')).toFixed(2)).toBe('0.00');
+    });
+
+    it('owes nothing while no month is due, however little was paid', () => {
+      expect(arrears(d(12000), 0, d(0)).toFixed(2)).toBe('0.00');
     });
   });
 });
