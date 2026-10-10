@@ -1,18 +1,17 @@
 import { Prisma } from '../../../generated/prisma/client';
+import type { EnrollmentTermService } from '../../enrollments/enrollment-term.service';
 import type { EnrollmentService } from '../../enrollments/enrollment.service';
+import type { ProgramWindowService } from '../../programs/program-window.service';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { EradatArrearsService } from '../eradat-arrears.service';
 import { EradatLinesService } from '../eradat-lines.service';
-import type { EradatWindowService } from '../eradat-window.service';
 
 const d = (value: number) => new Prisma.Decimal(value);
 
 const WINDOW = {
   program: { id: 'fund', name: 'اشتراكات الصندوق', entryMode: 'MONTHLY' },
-  cycle: { startYear: 2026, endYear: 2029 },
   year: 2026,
-  years: [2026, 2027, 2028, 2029],
-  runningYears: [2026, 2027, 2028, 2029],
+  years: [2026],
 };
 const ROW = (id: string, contributorId: string, status = 'ACTIVE') => ({
   id,
@@ -35,6 +34,7 @@ describe('EradatLinesService.getEnrollmentLines', () => {
     attachContributors: jest.fn(),
   };
   const mockArrears = { loadArrears: jest.fn() };
+  const mockTerms = { loadTerms: jest.fn() };
   let service: EradatLinesService;
 
   beforeEach(() => {
@@ -46,10 +46,13 @@ describe('EradatLinesService.getEnrollmentLines', () => {
         Promise.resolve(rows.map(withContributor)),
     );
     mockPrisma.payment.findMany.mockResolvedValue([]);
+    mockPrisma.payment.groupBy.mockResolvedValue([]);
+    mockTerms.loadTerms.mockResolvedValue(new Map());
     service = new EradatLinesService(
       mockPrisma as unknown as PrismaService,
-      mockWindow as unknown as EradatWindowService,
+      mockWindow as unknown as ProgramWindowService,
       mockEnrollments as unknown as EnrollmentService,
+      mockTerms as unknown as EnrollmentTermService,
       mockArrears as unknown as EradatArrearsService,
     );
   });
@@ -120,7 +123,6 @@ describe('EradatLinesService.getEnrollmentLines', () => {
     mockWindow.resolve.mockResolvedValue({
       ...WINDOW,
       program: { ...WINDOW.program, entryMode: 'DATED' },
-      cycle: null,
     });
 
     const result = await service.getEnrollmentLines('camp', {
@@ -132,11 +134,32 @@ describe('EradatLinesService.getEnrollmentLines', () => {
     expect(mockArrears.loadArrears).not.toHaveBeenCalled();
   });
 
-  it('shows every line unfiltered, with its arrears, and none for a dormant one', async () => {
+  it('shows every line unfiltered with its arrears — a dormant one owes what fell due before it was frozen', async () => {
     mockEnrollments.listEnrollmentPage.mockResolvedValue({
       rows: [ROW('e1', 'c1'), ROW('e2', 'c2', 'DORMANT')],
       nextCursor: null,
     });
+    mockTerms.loadTerms.mockResolvedValue(
+      new Map([
+        [
+          'e2',
+          [
+            {
+              fromYear: 2010,
+              fromMonth: 1,
+              status: 'ACTIVE',
+              expectedRate: d(12000),
+            },
+            {
+              fromYear: 2026,
+              fromMonth: 5,
+              status: 'DORMANT',
+              expectedRate: d(12000),
+            },
+          ],
+        ],
+      ]),
+    );
 
     const result = await service.getEnrollmentLines('fund', { limit: 50 });
 
@@ -144,18 +167,22 @@ describe('EradatLinesService.getEnrollmentLines', () => {
     expect(mockEnrollments.listEnrollmentPage).toHaveBeenCalledWith('fund', {
       limit: 50,
     });
+    // The terms of exactly this page, through the year on screen.
+    expect(mockTerms.loadTerms).toHaveBeenCalledWith(
+      { enrollmentIds: ['e1', 'e2'] },
+      2026,
+    );
     expect(result.items.map((line) => [line.id, line.arrears])).toEqual([
       ['e1', '9000.00'],
-      ['e2', null],
+      ['e2', '4000.00'], // January–April
     ]);
   });
 
-  it('adds what each member paid in earlier cycles to their running total', async () => {
+  it('adds what each member paid in every other year to their running total', async () => {
     mockWindow.resolve.mockResolvedValue({
       ...WINDOW,
       year: 2030,
-      years: [2030, 2031, 2032],
-      runningYears: [2026, 2027, 2028, 2029, 2030, 2031, 2032],
+      years: [2027, 2030],
     });
     mockEnrollments.listEnrollmentPage.mockResolvedValue({
       rows: [{ ...ROW('e1', 'c1'), previousSubscription: d(79600) }],
@@ -176,28 +203,23 @@ describe('EradatLinesService.getEnrollmentLines', () => {
 
     const result = await service.getEnrollmentLines('fund', { limit: 50 });
 
-    // Only the years before the current cycle, summed in SQL.
+    // The year on screen comes as cells; every other year, summed in SQL.
+    expect(mockPrisma.payment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { programId: 'fund', contributorId: { in: ['c1'] }, year: 2030 },
+      }),
+    );
     expect(mockPrisma.payment.groupBy).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
           programId: 'fund',
-          year: { gte: 2026, lt: 2030 },
+          year: { not: 2030 },
           contributorId: { in: ['c1'] },
         },
       }),
     );
-    // 79,600 typed previous + 6,000 from the last cycle + 500 this cycle.
+    // 79,600 typed previous + 6,000 from other years + 500 this year.
     expect(result.items[0].runningTotal).toBe('86100.00');
-  });
-
-  it('skips the earlier-cycles read while the current cycle is the first', async () => {
-    mockEnrollments.listEnrollmentPage.mockResolvedValue({
-      rows: [ROW('e1', 'c1')],
-      nextCursor: null,
-    });
-
-    await service.getEnrollmentLines('fund', { limit: 50 });
-
-    expect(mockPrisma.payment.groupBy).not.toHaveBeenCalled();
+    expect(result.items[0].yearTotal).toBe('500.00');
   });
 });

@@ -1,27 +1,17 @@
 import { HttpStatus } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma/client';
 import { AppException } from '../../common/exceptions/app.exception';
-import { CycleService } from '../../cycles/cycle.service';
 import type { EnrollmentService } from '../../enrollments/enrollment.service';
 import type { ProgramService } from '../../programs/program.service';
 import type { PrismaService } from '../../prisma/prisma.service';
 import { PaymentService } from '../payment.service';
 
-const CYCLE = {
-  id: 'c1',
-  programId: 'fund',
-  startYear: 2026,
-  lengthYears: 4,
-  endYear: 2029,
-  isCurrent: true,
-};
 const MONTHLY_PROGRAM = {
   id: 'fund',
   name: 'اشتراكات الصندوق',
   type: 'PERIODIC',
   isProtected: true,
   sortOrder: 0,
-  cycles: [CYCLE],
 };
 const DATED_PROGRAM = {
   id: 'camp',
@@ -29,7 +19,6 @@ const DATED_PROGRAM = {
   type: 'TEMPORARY',
   isProtected: false,
   sortOrder: 1,
-  cycles: [],
 };
 
 const mockPrisma = {
@@ -84,14 +73,9 @@ describe('PaymentService', () => {
       (fn: (tx: typeof mockPrisma) => unknown) => fn(mockPrisma),
     );
     mockPrisma.program.findFirst.mockResolvedValue({ id: 'fund' });
-    // The real CycleService, so the window and year fence under test are the shipped ones.
-    const cycleService = new CycleService(
-      mockPrisma as unknown as PrismaService,
-      mockProgramService as unknown as ProgramService,
-    );
     service = new PaymentService(
       mockPrisma as unknown as PrismaService,
-      cycleService,
+      mockProgramService as unknown as ProgramService,
       mockEnrollmentService as unknown as EnrollmentService,
     );
   });
@@ -238,17 +222,27 @@ describe('PaymentService', () => {
       expect(mockPrisma.payment.upsert).not.toHaveBeenCalled();
     });
 
-    it('rejects a year outside the program’s current cycle — the fence around unconfirmed advance payments', async () => {
-      await expect(
-        service.setCell(
-          'u1',
-          'fund',
-          CONTRIBUTOR,
-          { year: 2030, month: 1 },
-          { isStarred: false, amount: '1' },
-        ),
-      ).rejects.toMatchObject({ errorCode: 'CYCLE_YEAR_OUT_OF_RANGE' });
-      expect(mockPrisma.payment.upsert).not.toHaveBeenCalled();
+    it('writes any year — there are no cycles, so a member paying ahead is entered in next year’s cells', async () => {
+      mockPrisma.payment.upsert.mockResolvedValue({
+        year: 2027,
+        month: 1,
+        isStarred: false,
+        amount: new Prisma.Decimal(1),
+      });
+
+      await service.setCell(
+        'u1',
+        'fund',
+        CONTRIBUTOR,
+        { year: 2027, month: 1 },
+        { isStarred: false, amount: '1' },
+      );
+
+      expect(mockPrisma.payment.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: expect.objectContaining({ year: 2027, month: 1 }),
+        }),
+      );
     });
 
     it('refuses a monthly cell on a program that keeps a dated ledger', async () => {
@@ -285,7 +279,7 @@ describe('PaymentService', () => {
       expect(mockPrisma.payment.upsert).not.toHaveBeenCalled();
     });
 
-    it('answers the cycle fence before a payer failure', async () => {
+    it('answers the entry-mode refusal before a payer failure', async () => {
       mockEnrollmentService.lookUpContributorPayer.mockResolvedValue({
         enrolled: false,
         live: true,
@@ -293,12 +287,12 @@ describe('PaymentService', () => {
       await expect(
         service.setCell(
           'u1',
-          'fund',
+          'camp',
           CONTRIBUTOR,
-          { year: 2030, month: 1 },
+          { year: 2026, month: 1 },
           { isStarred: false, amount: '1' },
         ),
-      ).rejects.toMatchObject({ errorCode: 'CYCLE_YEAR_OUT_OF_RANGE' });
+      ).rejects.toMatchObject({ errorCode: 'PROGRAM_NOT_MONTHLY' });
     });
   });
 
@@ -469,7 +463,7 @@ describe('PaymentService', () => {
       expect(mockPrisma.payment.deleteMany).not.toHaveBeenCalled();
     });
 
-    it('removes an entry from any year — a temporary program has no cycle to fence it', async () => {
+    it('removes an entry from any year', async () => {
       mockPrisma.payment.findFirst.mockResolvedValue({
         year: 2031,
         contributorId: null,
@@ -516,22 +510,5 @@ describe('PaymentService', () => {
         service.deletePayment('gone', 'pay-1'),
       ).rejects.toMatchObject({ errorCode: 'PAYMENT_NOT_FOUND' });
     });
-  });
-
-  it('keeps advance payments pending at 501', () => {
-    let thrown: unknown;
-    try {
-      service.recordAdvancePayment(
-        'fund',
-        CONTRIBUTOR,
-        { year: 2026, month: 1 },
-        2027,
-        '1200',
-      );
-    } catch (err) {
-      thrown = err;
-    }
-    expect(thrown).toMatchObject({ errorCode: 'FEATURE_PENDING_CONFIRMATION' });
-    expect((thrown as AppException).getStatus()).toBe(501);
   });
 });

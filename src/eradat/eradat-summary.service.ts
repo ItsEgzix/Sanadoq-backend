@@ -6,18 +6,25 @@ import {
   toRatioString,
   ZERO,
 } from '../common/utils/money.util';
+import { MAX_BOOK_YEARS } from '../programs/program.constant';
+import {
+  ProgramWindowService,
+  type ProgramWindow,
+} from '../programs/program-window.service';
 import type { EntryMode } from '../programs/program.util';
 import { PrismaService } from '../prisma/prisma.service';
 import type { EradatYearQueryDto } from './dto/eradat-year-query.dto';
 import { EradatArrearsService } from './eradat-arrears.service';
-import { EradatWindowService } from './eradat-window.service';
-import { collectionRatio, runningTotal } from './revenue.util';
+import {
+  collectionRatio,
+  remainingForYear,
+  runningTotal,
+} from './revenue.util';
 
 // Every revenue figure below is filtered on `programId` — the receiving
 // program — and split by who paid. A payment this program *made* to another
-// (payerProgramId = this program) is never among them: it is reported
-// separately as an outflow and never subtracted, since there is no Expenses
-// module to book it against yet (see the TODO on Payment.payerProgramId).
+// (payerProgramId = this program) is never among them: it is this program's
+// expense, read by the expense side (ExpenseSummaryService).
 const PAYER_KINDS = {
   enrolled: { contributorId: { not: null } },
   programs: { payerProgramId: { not: null } },
@@ -25,7 +32,7 @@ const PAYER_KINDS = {
 } satisfies Record<string, Prisma.PaymentWhereInput>;
 
 type PayerKind = keyof typeof PAYER_KINDS;
-type KindTotals = Record<PayerKind, Prisma.Decimal>;
+export type KindTotals = Record<PayerKind, Prisma.Decimal>;
 
 interface MonthTotals extends KindTotals {
   // Unstarred payments by enrolled contributors that month, and stars.
@@ -42,7 +49,7 @@ const emptyKindTotals = (): KindTotals => ({
   oneOff: ZERO,
 });
 
-const kindTotal = (totals: KindTotals) =>
+export const kindTotal = (totals: KindTotals) =>
   sumMoney([totals.enrolled, totals.programs, totals.oneOff]);
 
 function toKindView(totals: KindTotals) {
@@ -55,62 +62,59 @@ function toKindView(totals: KindTotals) {
 }
 
 /**
- * One program's figures for one year: pledges against pledge-backed
- * collections, revenue split by payer kind, month and year totals, running
- * totals, and the outflows to other programs. Sums run in SQL, so the cost is
- * flat in the number of enrollments; they agree with revenue.util because a
- * star's amount is NULL by constraint.
+ * One program's revenue for one year: pledges against pledge-backed
+ * collections, revenue split by payer kind, month and year totals and
+ * running totals. Sums run in SQL, so the cost is flat in the number of
+ * enrollments; they agree with revenue.util because a star's amount is NULL
+ * by constraint.
  */
 @Injectable()
 export class EradatSummaryService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly windowService: EradatWindowService,
+    private readonly windowService: ProgramWindowService,
     private readonly arrearsService: EradatArrearsService,
   ) {}
 
-  async getSummary(programId: string, { year: requested }: EradatYearQueryDto) {
-    const window = await this.windowService.resolve(programId, requested);
-    const { program, year, years, runningYears } = window;
+  async getSummary(programId: string, { year }: EradatYearQueryDto) {
+    return this.summarise(await this.windowService.resolve(programId, year));
+  }
 
-    const [pledges, statusCounts, yearTotals, months, transfersOut, owing] =
+  /** The summary for a window already resolved — the dashboard's way in. */
+  async summarise(window: ProgramWindow) {
+    const { program, year, years } = window;
+    const programId = program.id;
+
+    const [previous, statusCounts, totalsByYear, months, owing] =
       await Promise.all([
         this.prisma.programEnrollment.aggregate({
           where: { programId },
-          _sum: { expectedRate: true, previousSubscription: true },
+          _sum: { previousSubscription: true },
         }),
         this.prisma.programEnrollment.groupBy({
           by: ['status'],
           where: { programId },
           _count: { _all: true },
         }),
-        // Over the running years, which hold the window's years too.
-        this.loadYearTotals(programId, runningYears),
+        this.loadYearTotals(programId),
         this.loadMonthTotals(programId, year, program.entryMode),
-        this.loadTransfersOut(programId, year),
-        // Only a periodic program has pledges to fall behind on.
+        // Only a periodic program has pledges to collect against.
         program.entryMode === 'MONTHLY'
           ? this.arrearsService.loadArrears(programId, year)
           : null,
       ]);
 
-    const selected = yearTotals.get(year) ?? emptyKindTotals();
-    const windowTotals = years.map(
-      (windowYear) => yearTotals.get(windowYear) ?? emptyKindTotals(),
-    );
-    const runningTotals = runningYears.map(
-      (runningYear) => yearTotals.get(runningYear) ?? emptyKindTotals(),
-    );
-    // Dormant enrollments still count toward expected: their pledge stands
-    // until the fund confirms otherwise (an open question).
-    const expectedTotal = pledges._sum.expectedRate ?? ZERO;
-    const previousSubscriptionTotal = pledges._sum.previousSubscription ?? ZERO;
+    const totalsOf = (y: number) => totalsByYear.get(y) ?? emptyKindTotals();
+    const selected = totalsOf(year);
+    const allYears = [...totalsByYear.values()];
+    const previousSubscriptionTotal =
+      previous._sum.previousSubscription ?? ZERO;
+    const expectedTotal = owing?.expectedTotal ?? ZERO;
     const countOf = (status: 'ACTIVE' | 'DORMANT') =>
       statusCounts.find((row) => row.status === status)?._count._all ?? 0;
 
     return {
       program,
-      cycle: window.cycle,
       year,
       years,
       counts: {
@@ -124,13 +128,17 @@ export class EradatSummaryService {
         count: owing.behind.size,
         total: toMoneyString(sumMoney([...owing.behind.values()])),
       },
+      // The workbook's الحساب block: اجمالي معدل الاشتراك, اجمالي التحصيل,
+      // اجمالي المتبقي and النسبة.
       collection: {
         expectedTotal: toMoneyString(expectedTotal),
-        pledgedTotal: toMoneyString(selected.enrolled),
-        ratio: toRatioString(collectionRatio(expectedTotal, selected.enrolled)),
+        collectedTotal: toMoneyString(selected.enrolled),
+        remainingTotal: toMoneyString(
+          remainingForYear(expectedTotal, selected.enrolled),
+        ),
+        ratio: toRatioString(collectionRatio(selected.enrolled, expectedTotal)),
       },
       revenue: toKindView(selected),
-      transfersOut,
       months: months.map((month, index) => ({
         month: index + 1,
         ...toKindView(month),
@@ -138,41 +146,38 @@ export class EradatSummaryService {
         starredCount: month.starredCount,
         entryCount: month.entryCount,
       })),
-      yearTotals: years.map((windowYear, index) => ({
-        year: windowYear,
-        ...toKindView(windowTotals[index]),
-      })),
+      yearTotals: years.map((y) => ({ year: y, ...toKindView(totalsOf(y)) })),
       running: {
         previousSubscriptionTotal: toMoneyString(previousSubscriptionTotal),
         // Summing every enrollment's running total gives the same figure,
-        // since each is its previous subscription plus its payments over the
-        // running years.
+        // since each is its previous subscription plus all its payments.
         enrolledRunningTotal: toMoneyString(
           runningTotal(
             previousSubscriptionTotal,
-            runningTotals.map((totals) => totals.enrolled),
+            allYears.map((totals) => totals.enrolled),
           ),
         ),
         revenueRunningTotal: toMoneyString(
-          runningTotal(previousSubscriptionTotal, runningTotals.map(kindTotal)),
+          runningTotal(previousSubscriptionTotal, allYears.map(kindTotal)),
         ),
       },
     };
   }
 
-  // Window totals per year, split by payer kind.
+  // Every year's totals, split by payer kind — the year cards and the
+  // running totals, which cover every year the books hold.
   private async loadYearTotals(
     programId: string,
-    years: readonly number[],
   ): Promise<Map<number, KindTotals>> {
-    const range = { gte: years[0], lte: years[years.length - 1] };
     const byYear = new Map<number, KindTotals>();
     await Promise.all(
       (Object.keys(PAYER_KINDS) as PayerKind[]).map(async (kind) => {
         const rows = await this.prisma.payment.groupBy({
           by: ['year'],
-          where: { programId, year: range, ...PAYER_KINDS[kind] },
+          where: { programId, ...PAYER_KINDS[kind] },
           _sum: { amount: true },
+          orderBy: { year: 'asc' },
+          take: MAX_BOOK_YEARS,
         });
         for (const row of rows) {
           const totals = byYear.get(row.year) ?? emptyKindTotals();
@@ -252,35 +257,5 @@ export class EradatSummaryService {
       }),
     );
     return months;
-  }
-
-  // What this program paid to others in `year` — informational only.
-  private async loadTransfersOut(programId: string, year: number) {
-    const [rows, names] = await Promise.all([
-      this.prisma.payment.groupBy({
-        by: ['programId'],
-        where: { payerProgramId: programId, year },
-        _sum: { amount: true },
-      }),
-      // The same set of receivers, found by the relation rather than by the
-      // ids above, so both run at once instead of one round trip after the
-      // other. The unfiltered client on purpose: a receiving program deleted
-      // since must still be named, because the money did leave.
-      this.prisma.raw.program.findMany({
-        where: {
-          receivedPayments: { some: { payerProgramId: programId, year } },
-        },
-        select: { id: true, name: true },
-      }),
-    ]);
-    const programs = rows.map((row) => ({
-      programId: row.programId,
-      name: names.find((p) => p.id === row.programId)?.name ?? '',
-      total: toMoneyString(row._sum.amount),
-    }));
-    return {
-      total: toMoneyString(sumMoney(rows.map((row) => row._sum.amount))),
-      programs,
-    };
   }
 }

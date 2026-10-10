@@ -21,7 +21,9 @@ import {
   type EnrollmentFieldsRow,
   type EnrollmentRow,
 } from './enrollment.constant';
-import { toEnrollmentView } from './enrollment.util';
+import { EnrollmentTermService } from './enrollment-term.service';
+import { currentMonth } from './enrollment-term.util';
+import { assertTakesEnrollments, toEnrollmentView } from './enrollment.util';
 
 const DIGITS_ONLY = /^\d+$/;
 
@@ -36,6 +38,10 @@ const DIGITS_ONLY = /^\d+$/;
  * their last (addDonor, removeDonorIfEmpty), because Payment's composite FK
  * still needs one under every contributor payment.
  *
+ * A subscription's dated changes — dormancy, reactivation, a pledge from a
+ * month — are EnrollmentTermService's; this service writes the joining term
+ * and the corrections that stand in for one.
+ *
  * Exported for PaymentModule (who may pay, and the donor rows) and
  * EradatModule (the grid pages through enrollments).
  */
@@ -45,6 +51,7 @@ export class EnrollmentService {
     private readonly prisma: PrismaService,
     private readonly programService: ProgramService,
     private readonly contributorService: ContributorService,
+    private readonly termService: EnrollmentTermService,
   ) {}
 
   /**
@@ -184,15 +191,23 @@ export class EnrollmentService {
     }
   }
 
-  async createEnrollment(programId: string, dto: CreateEnrollmentDto) {
+  async createEnrollment(
+    userId: string,
+    programId: string,
+    dto: CreateEnrollmentDto,
+  ) {
     const program = await this.assertTakesEnrollments(programId);
+    const joinedFrom = dto.joinedFrom ?? currentMonth();
+    this.termService.assertJoinable(joinedFrom);
     // The FK would accept a soft-deleted or merged-away contributor; this would
     // not.
     if (dto.contributorId)
       await this.contributorService.assertContributorExists(dto.contributorId);
 
-    // One transaction: a new contributor and their enrollment land together, so
-    // a clash on the enrollment never leaves a half-made contributor behind.
+    // One transaction: a new contributor, their enrollment and its joining
+    // term land together, so a clash on the enrollment never leaves a
+    // half-made contributor behind, and no enrollment exists without the
+    // month it started.
     const { enrollment, newContributor } = await this.prisma.$transaction(
       async (tx) => {
         const newContributor = dto.contributor
@@ -212,6 +227,13 @@ export class EnrollmentService {
             },
             select: ENROLLMENT_SELECT,
           });
+          await this.termService.addJoiningTerm(
+            tx,
+            userId,
+            enrollment.id,
+            joinedFrom,
+            dto.expectedRate,
+          );
           return { enrollment, newContributor };
         } catch (err) {
           // The unique (contributorId, programId) index is the dedupe.
@@ -237,7 +259,14 @@ export class EnrollmentService {
     };
   }
 
+  /**
+   * Corrects what an enrollment carries: its previous subscription, or a
+   * pledge that was wrong from the start — which the latest term takes over
+   * too, so the history and the mirror agree. A pledge that changes from a
+   * month on is EnrollmentTermService.changeRate.
+   */
   async updateEnrollment(
+    userId: string,
     programId: string,
     enrollmentId: string,
     dto: UpdateEnrollmentDto,
@@ -249,49 +278,29 @@ export class EnrollmentService {
     ]);
     if (program.status === 'rejected') throw program.reason;
     if (found.status === 'rejected') throw found.reason;
-    const enrollment = await this.prisma.programEnrollment.update({
-      where: { id: enrollmentId },
-      data: dto,
-      select: ENROLLMENT_SELECT,
+    const { expectedRate } = dto;
+    // The term and the mirror commit together; the update goes first so its
+    // row lock queues a second correction behind this one.
+    const enrollment = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.programEnrollment.update({
+        where: { id: enrollmentId },
+        data: dto,
+        select: ENROLLMENT_SELECT,
+      });
+      if (expectedRate !== undefined) {
+        await this.termService.correctLatestRate(
+          tx,
+          userId,
+          found.value,
+          expectedRate,
+        );
+      }
+      return updated;
     });
     return {
       ...toEnrollmentView(enrollment),
       contributorName: enrollment.contributor.name,
       successCode: 'ENROLLMENT_UPDATE_SUCCESS',
-    };
-  }
-
-  async markEnrollmentDormant(programId: string, enrollmentId: string) {
-    // The conditional update is the transition: two clicks race and exactly
-    // one flips the status. A donor row in a temporary program never goes
-    // dormant — there is no subscription to pause — so the filter skips it
-    // and the miss is explained below.
-    const { count } = await this.prisma.programEnrollment.updateMany({
-      where: {
-        id: enrollmentId,
-        programId,
-        status: 'ACTIVE',
-        program: { type: 'PERIODIC' },
-      },
-      data: { status: 'DORMANT' },
-    });
-    if (count === 0) {
-      await this.findEnrollmentOrThrow(programId, enrollmentId);
-      await this.assertTakesEnrollments(programId);
-      throw new AppException(
-        'ENROLLMENT_ALREADY_DORMANT',
-        { enrollmentId },
-        HttpStatus.CONFLICT,
-      );
-    }
-    const enrollment = await this.findEnrollmentOrThrow(
-      programId,
-      enrollmentId,
-    );
-    return {
-      ...toEnrollmentView(enrollment),
-      contributorName: enrollment.contributor.name,
-      successCode: 'ENROLLMENT_MARK_DORMANT_SUCCESS',
     };
   }
 
@@ -331,31 +340,9 @@ export class EnrollmentService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // Pending confirmation from the fund. Each flow has its method so wiring it
-  // up replaces one `throw`; none is routed yet, and the UI shows each as a
+  // Pending confirmation from the fund. Not routed yet; the UI shows it as a
   // disabled control.
   // ═══════════════════════════════════════════════════════════════════════
-
-  // TODO(dormant-reactivation): the fund has not confirmed where a dormant
-  // enrollment's prior balance goes or how rejoining restores
-  // previousSubscription. This is meant to be the only DORMANT → ACTIVE path —
-  // UpdateEnrollmentDto deliberately carries no `status`.
-  reactivateEnrollment(_programId: string, _enrollmentId: string): never {
-    throw pendingFeature('enrollment.reactivate');
-  }
-
-  // TODO(mid-cycle-rate-change): unconfirmed whether a pledge can change
-  // mid-cycle and from when it would apply. Expected shape: an
-  // EnrollmentRate history (enrollmentId, effectiveYear, rate) that the
-  // collection ratio reads per year, with expectedRate kept as the latest.
-  scheduleRateChange(
-    _programId: string,
-    _enrollmentId: string,
-    _effectiveYear: number,
-    _expectedRate: string,
-  ): never {
-    throw pendingFeature('enrollment.rate-change');
-  }
 
   // TODO(collector-assignment): the rules mapping collectors to enrollments
   // are unknown. Expected shape: a Collector model (likely a User with a
@@ -369,18 +356,9 @@ export class EnrollmentService {
     throw pendingFeature('enrollment.assign-collector');
   }
 
-  // A temporary program's rows belong to the payment path, which adds and
-  // removes them with the gifts; enrolling, a pledge or dormancy there would
-  // turn a donor into a subscriber the program does not have.
   private async assertTakesEnrollments(programId: string): Promise<ProgramRow> {
     const program = await this.programService.assertProgramExists(programId);
-    if (program.type === 'TEMPORARY') {
-      throw new AppException(
-        'ENROLLMENT_PROGRAM_TEMPORARY',
-        { programName: program.name },
-        HttpStatus.CONFLICT,
-      );
-    }
+    assertTakesEnrollments(program);
     return program;
   }
 

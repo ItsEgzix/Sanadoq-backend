@@ -7,6 +7,7 @@ import {
   collectionRatio,
   monthRow,
   monthsDue,
+  remainingForYear,
   runningTotal,
   yearlyTotal,
 } from '../revenue.util';
@@ -58,7 +59,7 @@ describe('revenue.util', () => {
   });
 
   describe('runningTotal', () => {
-    it('adds the typed-in previous subscription to every window year', () => {
+    it('adds the typed-in previous subscription to every year the books hold', () => {
       expect(
         runningTotal(d(1000), [d(0), d(100), d('300.50'), d(0)]).toFixed(2),
       ).toBe('1400.50');
@@ -66,12 +67,25 @@ describe('revenue.util', () => {
   });
 
   describe('collectionRatio', () => {
-    it('divides expected by pledge-backed actual, as the spec defines it', () => {
-      expect(collectionRatio(d(1200), d(300))?.toFixed(4)).toBe('4.0000');
+    it("divides what subscribers paid by what their pledges expected — the workbook's نسبة التحصيل", () => {
+      // الحساب: 782,800 collected of 1,121,700 pledged.
+      expect(collectionRatio(d(782800), d(1121700))?.toFixed(4)).toBe('0.6979');
     });
 
-    it('returns null when nothing pledged was collected, instead of dividing by zero', () => {
-      expect(collectionRatio(d(1200), d(0))).toBeNull();
+    it('returns null when nothing was pledged, instead of dividing by zero', () => {
+      expect(collectionRatio(d(300), d(0))).toBeNull();
+    });
+  });
+
+  describe('remainingForYear', () => {
+    it("is what the year's pledges still wait for — the workbook's اجمالي المتبقي", () => {
+      expect(remainingForYear(d(1121700), d(782800)).toFixed(2)).toBe(
+        '338900.00',
+      );
+    });
+
+    it('is zero, not negative, once the year is collected beyond its pledges', () => {
+      expect(remainingForYear(d(1000), d(1500)).toFixed(2)).toBe('0.00');
     });
   });
 
@@ -89,21 +103,16 @@ describe('revenue.util', () => {
   });
 
   describe('buildGridLine', () => {
-    it('returns the year, per-year and running totals as fixed-scale strings, with stars null-valued', () => {
+    it("returns the year's and the running total as fixed-scale strings, with stars null-valued", () => {
+      // The opening total is the previous subscription plus every other
+      // year: here 1,000 typed in and 100 paid ahead into 2027.
       const line = buildGridLine(
-        [star(2026, 1), amount(2026, 3, '300.5'), amount(2027, 12, '100')],
-        [2026, 2027, 2028, 2029],
+        [star(2026, 1), amount(2026, 3, '300.5')],
         2026,
-        d(1000),
+        d(1100),
       );
       expect(line.yearTotal).toBe('300.50');
       expect(line.runningTotal).toBe('1400.50');
-      expect(line.yearTotals).toEqual([
-        { year: 2026, total: '300.50' },
-        { year: 2027, total: '100.00' },
-        { year: 2028, total: '0.00' },
-        { year: 2029, total: '0.00' },
-      ]);
       expect(line.months[0]).toEqual({
         year: 2026,
         month: 1,
@@ -116,27 +125,16 @@ describe('revenue.util', () => {
 
   describe('buildLedgerLine', () => {
     it('totals per-year SQL sums with no month cells, zero for a year with nothing', () => {
-      const line = buildLedgerLine(
-        new Map([[2025, d(250)]]),
-        [2025, 2026],
-        2026,
-        d(100),
-      );
+      const line = buildLedgerLine(new Map([[2025, d(250)]]), 2026, d(100));
       expect(line).toEqual({
         months: null,
         yearTotal: '0.00',
-        yearTotals: [
-          { year: 2025, total: '250.00' },
-          { year: 2026, total: '0.00' },
-        ],
         runningTotal: '350.00',
       });
     });
 
     it('treats a contributor with no payments at all as zero', () => {
-      expect(buildLedgerLine(undefined, [2026], 2026, d(0)).runningTotal).toBe(
-        '0.00',
-      );
+      expect(buildLedgerLine(undefined, 2026, d(0)).runningTotal).toBe('0.00');
     });
   });
 
@@ -162,24 +160,18 @@ describe('revenue.util', () => {
   });
 
   describe('arrears', () => {
-    it('is the pledge share for the months due, less what was paid in the year', () => {
-      // 12,000 a year, 9 months due → 9,000 owed; 6,000 paid.
-      expect(arrears(d(12000), 9, d(6000)).toFixed(2)).toBe('3000.00');
+    it('is what was owed for the months due, less what was paid in the year', () => {
+      // 9,000 owed through September; 6,000 paid.
+      expect(arrears(d(9000), d(6000)).toFixed(2)).toBe('3000.00');
     });
 
     it('is zero when paid up, and never negative when paid ahead', () => {
-      expect(arrears(d(12000), 9, d(9000)).toFixed(2)).toBe('0.00');
-      expect(arrears(d(12000), 9, d(12000)).toFixed(2)).toBe('0.00');
+      expect(arrears(d(9000), d(9000)).toFixed(2)).toBe('0.00');
+      expect(arrears(d(9000), d(12000)).toFixed(2)).toBe('0.00');
     });
 
-    it('rounds the share to the money scale before comparing', () => {
-      // 1,000 × 1 ÷ 12 = 83.333… → 83.33 owed.
-      expect(arrears(d(1000), 1, d(0)).toFixed(2)).toBe('83.33');
-      expect(arrears(d(1000), 1, d('83.33')).toFixed(2)).toBe('0.00');
-    });
-
-    it('owes nothing while no month is due, however little was paid', () => {
-      expect(arrears(d(12000), 0, d(0)).toFixed(2)).toBe('0.00');
+    it('owes nothing while nothing is owed, however little was paid', () => {
+      expect(arrears(d(0), d(0)).toFixed(2)).toBe('0.00');
     });
   });
 });

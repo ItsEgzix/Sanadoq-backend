@@ -29,7 +29,8 @@
  *                     cell needs a payer. The old rows were monthly totals
  *                     with no payer recorded, and the new books never invent
  *                     one. A reviewer enters them by hand if they matter.
- *   current Cycle   → the fund program's current cycle, if it has none.
+ *   Cycle           → NOT copied. The books have no cycles any more; every
+ *                     cell is filed by its year and shows in that year.
  *
  * Re-runnable: every write dedupes on a unique key (account number,
  * enrollment, cell, a deterministic idempotency key, the flag pair) or an
@@ -43,6 +44,7 @@ import {
   describeDatabase,
   matchContributorsByAccount,
   openDatabase,
+  writeMissingTerms,
 } from './script.util';
 
 const APPLY = process.argv.includes('--apply');
@@ -106,16 +108,7 @@ async function readLegacy(url: string) {
            FROM "MonthlyPayment"`,
       )
     ).rows;
-    const cycle = (
-      await legacy.query<{
-        startYear: number;
-        lengthYears: number;
-        endYear: number;
-      }>(
-        `SELECT "startYear", "lengthYears", "endYear" FROM "Cycle" WHERE "isCurrent"`,
-      )
-    ).rows[0];
-    return { members, deletedMembers, projects, cells, cycle };
+    return { members, deletedMembers, projects, cells };
   } finally {
     await legacy.end();
   }
@@ -211,25 +204,11 @@ async function main() {
       console.log(
         `  inserted ${count}, ${enrollments.length - count} already present`,
       );
+      // Each subscription needs the month it started; the old shape kept
+      // none, so it comes from the account number, as in the migration.
+      const terms = await writeMissingTerms(prisma, fund.id);
+      console.log(`  ${terms} joining terms written`);
     }
-
-    // ── Fund cycle ──
-    const current = await prisma.cycle.findFirst({
-      where: { programId: fund.id, isCurrent: true },
-      select: { startYear: true, endYear: true },
-    });
-    if (legacy.cycle) {
-      console.log(
-        `Fund cycle ${legacy.cycle.startYear}–${legacy.cycle.endYear}: ${current ? `the fund already has ${current.startYear}–${current.endYear} as current; left alone` : 'create as current'}`,
-      );
-      if (APPLY && !current) {
-        await prisma.cycle.createMany({
-          data: [{ programId: fund.id, ...legacy.cycle, isCurrent: true }],
-          skipDuplicates: true,
-        });
-      }
-    }
-    const fundWindow = current ?? legacy.cycle;
 
     // ── Project accounts — listed, never copied (see the mapping above) ──
     for (const project of legacy.projects) {
@@ -260,20 +239,6 @@ async function main() {
     console.log(
       `Payments: ${payments.length} planned (${payments.filter((p) => p.isStarred).length} ★)`,
     );
-    // Copied as they are, but the fund's books open on its current cycle;
-    // cells outside it stay invisible until a cycle covering them is current.
-    const outsideWindow = fundWindow
-      ? payments.filter(
-          (p) =>
-            p.programId === fund.id &&
-            (p.year < fundWindow.startYear || p.year > fundWindow.endYear),
-        ).length
-      : 0;
-    if (outsideWindow > 0 && fundWindow) {
-      console.log(
-        `  WARNING ${outsideWindow} fund cells fall outside the current cycle ${fundWindow.startYear}–${fundWindow.endYear}; they are kept but will not show until a cycle covering them is current`,
-      );
-    }
     if (APPLY) {
       let inserted = 0;
       for (let offset = 0; offset < payments.length; offset += BATCH) {

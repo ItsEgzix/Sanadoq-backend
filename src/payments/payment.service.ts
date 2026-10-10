@@ -1,10 +1,10 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { AppException } from '../common/exceptions/app.exception';
-import { pendingFeature } from '../common/utils/pending-feature.util';
 import { isUniqueViolation } from '../common/utils/prisma-error.util';
-import { CycleService } from '../cycles/cycle.service';
 import { EnrollmentService } from '../enrollments/enrollment.service';
-import type { EntryMode, ProgramView } from '../programs/program.util';
+import { ProgramService } from '../programs/program.service';
+import { programEntryMode, type EntryMode } from '../programs/program.util';
+import type { ProgramRow } from '../programs/program.constant';
 import { PrismaService } from '../prisma/prisma.service';
 import type { RecordPaymentDto } from './dto/record-payment.dto';
 import type { SetCellDto } from './dto/set-cell.dto';
@@ -24,9 +24,10 @@ type ContributorPayerFacts = { enrolled: boolean; live: boolean };
 /**
  * Writes money into a program's books, in the program's entry mode
  * (programEntryMode): monthly cells for PERIODIC programs, dated entries for
- * TEMPORARY ones. A periodic program's cells stay inside its current cycle —
- * which is also what fences off the unconfirmed advance-payment flow; a
- * temporary program has no cycle, so its gifts take any date.
+ * TEMPORARY ones. Any year can be written — there are no cycles to fence it —
+ * so a member paying ahead is simply entered in next year's cells, and an
+ * old year is corrected in place. The year's range is the DTOs' and CHECK
+ * "Payment_year_range"'s.
  *
  * A periodic program is paid by the contributors enrolled in it. A temporary
  * one takes a gift from anyone in the directory with no enrolling: their
@@ -37,7 +38,7 @@ type ContributorPayerFacts = { enrolled: boolean; live: boolean };
 export class PaymentService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly cycleService: CycleService,
+    private readonly programService: ProgramService,
     private readonly enrollmentService: EnrollmentService,
   ) {}
 
@@ -48,7 +49,7 @@ export class PaymentService {
     { year, month }: CellCoordinates,
     entry: SetCellDto,
   ) {
-    await this.assertCellWritable(programId, payer, year);
+    await this.assertWritable(programId, 'MONTHLY', payer);
 
     // A star stores amount NULL, which CHECK "Payment_amount_matches_star"
     // also enforces — that NULL is what keeps stars out of every SUM. The
@@ -80,7 +81,7 @@ export class PaymentService {
     payer: CellPayer,
     { year, month }: CellCoordinates,
   ) {
-    await this.assertCellWritable(programId, payer, year);
+    await this.assertWritable(programId, 'MONTHLY', payer);
 
     // Hard delete: an empty cell *is* the absence of a row, and a tombstone
     // would hold the unique key and block re-entering the month. deleteMany
@@ -100,7 +101,6 @@ export class PaymentService {
     const year = dto.paymentDate.getUTCFullYear();
     const { newDonorId } = await this.assertWritable(
       programId,
-      year,
       'DATED',
       dto.payer,
     );
@@ -142,14 +142,14 @@ export class PaymentService {
 
   async deletePayment(programId: string, paymentId: string) {
     // Side by side: the entry and the program it sits in.
-    const [found, window] = await Promise.allSettled([
+    const [found, program] = await Promise.allSettled([
       // month NULL: monthly cells are cleared through their cell URL, where
       // the payer and month are explicit.
       this.prisma.payment.findFirst({
         where: { id: paymentId, programId, month: null },
         select: { year: true, contributorId: true },
       }),
-      this.cycleService.resolveWindow(programId),
+      this.programService.assertProgramExists(programId),
     ]);
     // An entry in a missing program cannot be found, so its 404 answers first.
     if (found.status === 'rejected') throw found.reason;
@@ -161,10 +161,7 @@ export class PaymentService {
         HttpStatus.NOT_FOUND,
       );
     }
-    if (window.status === 'rejected') throw window.reason;
-    // No cycle fence: dated entries live only in temporary programs, which
-    // have no cycles (runsInCycles), just as recording one has none.
-    const { program } = window.value;
+    if (program.status === 'rejected') throw program.reason;
 
     // Hard delete, like clearing a cell: a wrong entry is removed so every
     // total drops it at once. An audit trail of corrections is not built yet.
@@ -173,7 +170,7 @@ export class PaymentService {
     });
     // A donor is someone who gave. Left in place after their last gift went,
     // the row would list them among the program's donors with nothing given.
-    if (program.type === 'TEMPORARY' && payment.contributorId) {
+    if (program.value.type === 'TEMPORARY' && payment.contributorId) {
       await this.enrollmentService.removeDonorIfEmpty(
         programId,
         payment.contributorId,
@@ -182,56 +179,28 @@ export class PaymentService {
     return { id: paymentId, successCode: 'PAYMENT_DELETE_SUCCESS' };
   }
 
-  // TODO(advance-payments): pending confirmation from the fund. A member
-  // paying this year for a future year has to be booked somewhere and later
-  // reallocated into that year's cells; how, and whether it counts toward
-  // this year's collection ratio, is unconfirmed. Until then writes outside
-  // the program's current cycle are refused (CycleService.resolveWindow).
-  // Expected shape: an AdvancePayment row (enrollment, paidYear, paidMonth,
-  // coversYear, amount) plus a reallocation step that writes the covered
-  // year's cells — no change to Payment.
-  recordAdvancePayment(
-    _programId: string,
-    _payer: CellPayer,
-    _paidOn: CellCoordinates,
-    _coversYear: number,
-    _amount: string,
-  ): never {
-    throw pendingFeature('payment.advance');
-  }
-
-  private async assertCellWritable(
-    programId: string,
-    payer: CellPayer,
-    year: number,
-  ): Promise<void> {
-    await this.assertWritable(programId, year, 'MONTHLY', payer);
-  }
-
   /**
-   * The checks in front of every payment write: the program exists, keeps
-   * this entry mode and its current cycle holds the year; and the payer may
-   * pay it. They read independent rows, so they run side by side — a cell
-   * save was waiting on them one after another. Settled rather than
-   * Promise.all so the program's error always answers first, as it did when
-   * it was checked first: an unknown program reads as PROGRAM_NOT_FOUND, not
-   * ENROLLMENT_NOT_FOUND.
+   * The checks in front of every payment write: the program exists and keeps
+   * this entry mode, and the payer may pay it. They read independent rows, so
+   * they run side by side — a cell save was waiting on them one after
+   * another. Settled rather than Promise.all so the program's error always
+   * answers first, as it did when it was checked first: an unknown program
+   * reads as PROGRAM_NOT_FOUND, not ENROLLMENT_NOT_FOUND.
    *
    * newDonorId is set when the write is a contributor's first gift to a
    * temporary program; the caller adds their donor row beside it.
    */
   private async assertWritable(
     programId: string,
-    year: number,
     mode: EntryMode,
     payer: PaymentPayer,
   ): Promise<{ newDonorId: string | null }> {
-    const [window, payerCheck] = await Promise.allSettled([
-      this.cycleService.resolveWindow(programId, year),
+    const [found, payerCheck] = await Promise.allSettled([
+      this.programService.assertProgramExists(programId),
       this.lookUpPayer(programId, payer),
     ]);
-    if (window.status === 'rejected') throw window.reason;
-    const { program } = window.value;
+    if (found.status === 'rejected') throw found.reason;
+    const program = found.value;
     this.assertEntryMode(program, mode);
     if (payerCheck.status === 'rejected') throw payerCheck.reason;
     if (payer.kind !== 'CONTRIBUTOR' || !payerCheck.value) {
@@ -246,8 +215,8 @@ export class PaymentService {
     };
   }
 
-  private assertEntryMode(program: ProgramView, mode: EntryMode): void {
-    if (program.entryMode === mode) return;
+  private assertEntryMode(program: ProgramRow, mode: EntryMode): void {
+    if (programEntryMode(program) === mode) return;
     throw new AppException(
       mode === 'MONTHLY' ? 'PROGRAM_NOT_MONTHLY' : 'PROGRAM_NOT_DATED',
       { name: program.name },
@@ -258,7 +227,7 @@ export class PaymentService {
   // Which fact decides depends on the program's type, known only now.
   // Returns the contributor when this gift needs a donor row first.
   private assertContributorMayPay(
-    program: ProgramView,
+    program: ProgramRow,
     contributorId: string,
     { enrolled, live }: ContributorPayerFacts,
   ): string | null {
@@ -295,13 +264,10 @@ export class PaymentService {
           payer.contributorId,
         );
       case 'PROGRAM': {
-        // TODO(expenses): a program paying another is an outflow for the
-        // payer. Today it is recorded only here, as revenue of the receiving
-        // program — and never summed into the payer's revenue or collection
-        // ratio, since every total filters on programId. Once the Expenses
-        // module exists, this same transaction must also be booked as an
-        // expense of payer.programId, linked to the Payment row, so the
-        // payer's books balance.
+        // One row, two sides: revenue of this program, and an expense of the
+        // payer that its expense sheet reads from this same row
+        // (ExpenseService) — never a second, copied booking that could
+        // disagree with it.
         if (payer.programId === programId) {
           throw new AppException('PAYMENT_SELF_TRANSFER');
         }

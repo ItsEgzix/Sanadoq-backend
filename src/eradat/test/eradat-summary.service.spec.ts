@@ -1,8 +1,8 @@
 import { Prisma } from '../../../generated/prisma/client';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { EradatArrearsService } from '../eradat-arrears.service';
+import type { ProgramWindowService } from '../../programs/program-window.service';
 import { EradatSummaryService } from '../eradat-summary.service';
-import type { EradatWindowService } from '../eradat-window.service';
 
 const d = (value: number) => new Prisma.Decimal(value);
 
@@ -81,14 +81,10 @@ const FUND_WINDOW = {
     type: 'PERIODIC' as const,
     isProtected: true,
     sortOrder: 0,
-    hasCycles: true,
     entryMode: 'MONTHLY' as const,
-    currentCycle: null,
   },
-  cycle: null,
   year: 2026,
-  years: [2026, 2027, 2028, 2029],
-  runningYears: [2026, 2027, 2028, 2029],
+  years: [2026],
 };
 
 describe('EradatSummaryService', () => {
@@ -114,6 +110,7 @@ describe('EradatSummaryService', () => {
         ['e1', d(4500)],
         ['e2', d(250.5)],
       ]),
+      expectedTotal: d(12000),
     });
     mockPrisma.programEnrollment.aggregate.mockResolvedValue({
       _sum: { expectedRate: d(12000), previousSubscription: d(5000) },
@@ -127,7 +124,7 @@ describe('EradatSummaryService', () => {
     ]);
     service = new EradatSummaryService(
       mockPrisma as unknown as PrismaService,
-      mockWindow as unknown as EradatWindowService,
+      mockWindow as unknown as ProgramWindowService,
       mockArrears as unknown as EradatArrearsService,
     );
   });
@@ -205,12 +202,13 @@ describe('EradatSummaryService', () => {
       fromOneOff: '0.00',
       total: '3000.00',
     });
+    // Collected ÷ expected, like the workbook's نسبة التحصيل.
     expect(summary.collection).toEqual({
       expectedTotal: '12000.00',
-      pledgedTotal: '3000.00',
-      ratio: '4.0000',
+      collectedTotal: '3000.00',
+      remainingTotal: '9000.00',
+      ratio: '0.2500',
     });
-    expect(summary.transfersOut.total).toBe('14000.00');
     // Every revenue query filters on the receiving program, never the payer.
     const revenueQueries = groupBy.mock.calls
       .map(([args]) => args.where as Where)
@@ -314,16 +312,14 @@ describe('EradatSummaryService', () => {
     expect(summary.running.enrolledRunningTotal).toBe('6200.00'); // 5000 previous + 1200
   });
 
-  it('keeps earlier cycles in the running totals after a new cycle becomes current', async () => {
+  it('keeps every year in the running totals, whichever year is on screen', async () => {
     mockWindow.resolve.mockResolvedValue({
       ...FUND_WINDOW,
       year: 2030,
-      years: [2030, 2031, 2032],
-      runningYears: [2026, 2027, 2028, 2029, 2030, 2031, 2032],
+      years: [2027, 2030],
     });
     groupBy.mockImplementation(
       fakeGroupBy([
-        // Paid in the previous cycle.
         {
           programId: 'fund',
           payer: 'contributor',
@@ -331,7 +327,6 @@ describe('EradatSummaryService', () => {
           month: 3,
           amount: 6000,
         },
-        // Paid in the current one.
         {
           programId: 'fund',
           payer: 'contributor',
@@ -339,17 +334,24 @@ describe('EradatSummaryService', () => {
           month: 1,
           amount: 500,
         },
+        // Paid ahead into a year after the one on screen: already received.
+        {
+          programId: 'fund',
+          payer: 'contributor',
+          year: 2031,
+          month: 1,
+          amount: 100,
+        },
       ]),
     );
 
     const summary = await service.getSummary('fund', { year: 2030 });
 
-    // 5000 typed previous + 6000 from 2027 + 500 from 2030.
-    expect(summary.running.enrolledRunningTotal).toBe('11500.00');
-    expect(summary.running.revenueRunningTotal).toBe('11500.00');
-    // The year cards stay on the current cycle.
-    expect(summary.yearTotals.map((entry) => entry.year)).toEqual([
-      2030, 2031, 2032,
-    ]);
+    // 5000 typed previous + 6000 + 500 + 100.
+    expect(summary.running.enrolledRunningTotal).toBe('11600.00');
+    expect(summary.running.revenueRunningTotal).toBe('11600.00');
+    // The year cards follow the window's years.
+    expect(summary.yearTotals.map((entry) => entry.year)).toEqual([2027, 2030]);
+    expect(summary.revenue.total).toBe('500.00');
   });
 });

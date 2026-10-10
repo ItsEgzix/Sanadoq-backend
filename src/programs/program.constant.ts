@@ -1,27 +1,15 @@
 import type { Prisma } from '../../generated/prisma/client';
-import { CYCLE_SELECT } from '../cycles/cycle.constant';
 
 // The fund, its standing programs and every campaign it has run. The cap
 // keeps the sidebar list a plain array and bounds per-program fan-out.
 export const PROGRAM_CAP = 100;
 
-// The program's own columns. Hot reads load the current cycle beside these
-// in a second, parallel query (ProgramService.withCurrentCycles) instead of
-// nesting it: Prisma runs a nested select as a second query *after* the
-// first, which costs a full round trip to a remote database.
-export const PROGRAM_FIELDS_SELECT = {
+export const PROGRAM_SELECT = {
   id: true,
   name: true,
   type: true,
   isProtected: true,
   sortOrder: true,
-} satisfies Prisma.ProgramSelect;
-
-export const PROGRAM_SELECT = {
-  ...PROGRAM_FIELDS_SELECT,
-  // The current cycle rides along on every program read: whether one exists
-  // decides whether the program's books can open at all.
-  cycles: { where: { isCurrent: true }, take: 1, select: CYCLE_SELECT },
 } satisfies Prisma.ProgramSelect;
 
 export type ProgramRow = Prisma.ProgramGetPayload<{
@@ -36,3 +24,8 @@ export const PROGRAM_ORDER_BY = [
   { name: 'asc' },
   { id: 'asc' },
 ] satisfies Prisma.ProgramOrderByWithRelationInput[];
+
+// Payment and expense years are 2000..2100 (CHECKs "Payment_year_range" and
+// "Expense_year_range"), so this bounds a program's distinct years by
+// construction.
+export const MAX_BOOK_YEARS = 101;

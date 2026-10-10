@@ -1,23 +1,16 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import type { Prisma } from '../../generated/prisma/client';
 import { AppException } from '../common/exceptions/app.exception';
 import { isUniqueViolation } from '../common/utils/prisma-error.util';
-import { CYCLE_SELECT, type CycleRow } from '../cycles/cycle.constant';
 import { PrismaService } from '../prisma/prisma.service';
 import type { CreateProgramDto } from './dto/create-program.dto';
 import type { UpdateProgramDto } from './dto/update-program.dto';
 import {
   PROGRAM_CAP,
-  PROGRAM_FIELDS_SELECT,
   PROGRAM_ORDER_BY,
   PROGRAM_SELECT,
   type ProgramRow,
 } from './program.constant';
 import { toProgramView, type ProgramView } from './program.util';
-
-type ProgramFieldsRow = Prisma.ProgramGetPayload<{
-  select: typeof PROGRAM_FIELDS_SELECT;
-}>;
 
 /**
  * Programs — every revenue stream, the fund's membership included.
@@ -28,33 +21,20 @@ type ProgramFieldsRow = Prisma.ProgramGetPayload<{
  * trigger "Program_guard_protected" repeats the rule in the database for
  * writes that never pass through this service.
  *
- * Exported for every module that works inside a program: cycles,
- * enrollments, payments and the read side.
+ * Exported for every module that works inside a program: enrollments,
+ * payments, expenses and the read side.
  */
 @Injectable()
 export class ProgramService {
   constructor(private readonly prisma: PrismaService) {}
 
   async listPrograms(): Promise<ProgramView[]> {
-    const [programs, currentCycles] = await Promise.all([
-      this.prisma.program.findMany({
-        orderBy: PROGRAM_ORDER_BY,
-        take: PROGRAM_CAP,
-        select: PROGRAM_FIELDS_SELECT,
-      }),
-      // Ordered like the programs, so the first PROGRAM_CAP current cycles
-      // belong to exactly the programs listed (at most one each, by the
-      // partial unique index "Cycle_single_current_per_program"). The
-      // soft-delete extension never reaches into relation filters, so the
-      // deleted programs are excluded by name.
-      this.prisma.cycle.findMany({
-        where: { isCurrent: true, program: { isDeleted: false } },
-        orderBy: PROGRAM_ORDER_BY.map((order) => ({ program: order })),
-        take: PROGRAM_CAP,
-        select: CYCLE_SELECT,
-      }),
-    ]);
-    return this.withCurrentCycles(programs, currentCycles).map(toProgramView);
+    const programs = await this.prisma.program.findMany({
+      orderBy: PROGRAM_ORDER_BY,
+      take: PROGRAM_CAP,
+      select: PROGRAM_SELECT,
+    });
+    return programs.map(toProgramView);
   }
 
   async getProgram(programId: string): Promise<ProgramView> {
@@ -64,19 +44,10 @@ export class ProgramService {
   // findFirst, not findUnique: only findFirst goes through the soft-delete
   // filter, and a deleted program must 404 like one that never existed.
   async assertProgramExists(programId: string): Promise<ProgramRow> {
-    // Both at once: every read and write inside a program starts here, so a
-    // sequential pair would put a second round trip in front of all of them.
-    // The cycle of a deleted program is read and discarded.
-    const [program, current] = await Promise.all([
-      this.prisma.program.findFirst({
-        where: { id: programId },
-        select: PROGRAM_FIELDS_SELECT,
-      }),
-      this.prisma.cycle.findFirst({
-        where: { programId, isCurrent: true },
-        select: CYCLE_SELECT,
-      }),
-    ]);
+    const program = await this.prisma.program.findFirst({
+      where: { id: programId },
+      select: PROGRAM_SELECT,
+    });
     if (!program) {
       throw new AppException(
         'PROGRAM_NOT_FOUND',
@@ -84,7 +55,7 @@ export class ProgramService {
         HttpStatus.NOT_FOUND,
       );
     }
-    return this.withCurrentCycles([program], current ? [current] : [])[0];
+    return program;
   }
 
   async createProgram(dto: CreateProgramDto) {
@@ -153,9 +124,10 @@ export class ProgramService {
         HttpStatus.CONFLICT,
       );
     }
-    // Soft delete: the program's enrollments and payments stay, so a restore
-    // brings its books back, and payments it made to other programs still
-    // name it. A hard delete is refused by those rows' Restrict FKs anyway.
+    // Soft delete: the program's enrollments, payments and expenses stay, so
+    // a restore brings its books back, and payments it made to other
+    // programs still name it. A hard delete is refused by those rows'
+    // Restrict FKs anyway.
     await this.prisma.program.update({
       where: { id: programId },
       data: { isDeleted: true, deletedAt: new Date() },
@@ -168,11 +140,11 @@ export class ProgramService {
   }
 
   // type decides whether payments are monthly cells or dated entries
-  // (programEntryMode) and whether the program has cycles (runsInCycles).
-  // Flipping it under existing payments or cycles would strand rows in a shape
-  // the program no longer reads. It also decides whether the program has
-  // subscribers at all: a periodic program's enrollments carry pledges a
-  // temporary one does not keep.
+  // (programEntryMode). Flipping it under existing payments would strand rows
+  // in a shape the program no longer reads. It also decides whether the
+  // program has subscribers at all: a periodic program's enrollments carry
+  // pledges and a dated history a temporary one does not keep. Expenses are
+  // the same sheet in both, so they never lock the type.
   private async assertTypeEditable(program: ProgramRow): Promise<void> {
     if (program.isProtected) {
       throw new AppException(
@@ -181,17 +153,16 @@ export class ProgramService {
         HttpStatus.CONFLICT,
       );
     }
-    const [payments, cycles, enrollments] = await Promise.all([
+    const [payments, enrollments] = await Promise.all([
       this.prisma.payment.count({ where: { programId: program.id } }),
-      this.prisma.cycle.count({ where: { programId: program.id } }),
       this.prisma.programEnrollment.count({
         where: { programId: program.id },
       }),
     ]);
-    if (payments > 0 || cycles > 0) {
+    if (payments > 0) {
       throw new AppException(
         'PROGRAM_SHAPE_LOCKED',
-        { payments, cycles },
+        { payments },
         HttpStatus.CONFLICT,
       );
     }
@@ -202,21 +173,6 @@ export class ProgramService {
         HttpStatus.CONFLICT,
       );
     }
-  }
-
-  // Rebuilds the PROGRAM_SELECT shape from the two parallel reads, so
-  // toProgramView and every caller see what the nested select returned.
-  private withCurrentCycles(
-    programs: ProgramFieldsRow[],
-    currentCycles: CycleRow[],
-  ): ProgramRow[] {
-    const byProgram = new Map(
-      currentCycles.map((cycle) => [cycle.programId, cycle]),
-    );
-    return programs.map((program) => {
-      const current = byProgram.get(program.id);
-      return { ...program, cycles: current ? [current] : [] };
-    });
   }
 
   // The partial unique index "Program_live_name_key" is the dedupe; a prior

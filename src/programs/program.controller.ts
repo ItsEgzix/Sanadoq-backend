@@ -14,8 +14,8 @@ import { UpdateProgramDto } from './dto/update-program.dto';
 import { ProgramService } from './program.service';
 
 /**
- * HTTP surface for programs. Everything inside a program — cycles,
- * enrollments, payments, the summary — hangs off /programs/:programId in its
+ * HTTP surface for programs. Everything inside a program — enrollments,
+ * payments, expenses, the summaries — hangs off /programs/:programId in its
  * own module's controller.
  */
 @RequirePermission(PERMISSIONS.MANAGE_FUND)

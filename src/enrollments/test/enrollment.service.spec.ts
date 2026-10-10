@@ -2,6 +2,7 @@ import { Prisma } from '../../../generated/prisma/client';
 import type { ContributorService } from '../../contributors/contributor.service';
 import type { ProgramService } from '../../programs/program.service';
 import type { PrismaService } from '../../prisma/prisma.service';
+import type { EnrollmentTermService } from '../enrollment-term.service';
 import { EnrollmentService } from '../enrollment.service';
 
 const mockPrisma = {
@@ -25,6 +26,11 @@ const mockContributorService = {
   assertContributorExists: jest.fn(),
   insertContributor: jest.fn(),
   flagPossibleDuplicates: jest.fn(),
+};
+const mockTermService = {
+  assertJoinable: jest.fn(),
+  addJoiningTerm: jest.fn(),
+  correctLatestRate: jest.fn(),
 };
 
 const CONTRIBUTOR = {
@@ -69,6 +75,7 @@ describe('EnrollmentService', () => {
       mockPrisma as unknown as PrismaService,
       mockProgramService as unknown as ProgramService,
       mockContributorService as unknown as ContributorService,
+      mockTermService as unknown as EnrollmentTermService,
     );
   });
 
@@ -78,7 +85,7 @@ describe('EnrollmentService', () => {
       mockPrisma.programEnrollment.create.mockResolvedValue(ENROLLMENT);
       mockContributorService.flagPossibleDuplicates.mockResolvedValue(1);
 
-      const result = await service.createEnrollment('fund', {
+      const result = await service.createEnrollment('u1', 'fund', {
         contributor: { name: 'Test', accountNumber: '2401007' },
         expectedRate: '6000',
       });
@@ -100,6 +107,14 @@ describe('EnrollmentService', () => {
           },
         }),
       );
+      // The joining term rides on the same transaction as the enrollment.
+      expect(mockTermService.addJoiningTerm).toHaveBeenCalledWith(
+        mockPrisma,
+        'u1',
+        'e1',
+        expect.objectContaining({ year: expect.any(Number) }),
+        '6000',
+      );
       const txDone = mockPrisma.$transaction.mock.invocationCallOrder[0];
       const flagged =
         mockContributorService.flagPossibleDuplicates.mock
@@ -115,7 +130,7 @@ describe('EnrollmentService', () => {
     it('enrolls an existing contributor without a duplicate check — they were checked when saved', async () => {
       mockPrisma.programEnrollment.create.mockResolvedValue(ENROLLMENT);
 
-      await service.createEnrollment('fund', {
+      await service.createEnrollment('u1', 'fund', {
         contributorId: 'p1',
         expectedRate: '6000',
       });
@@ -129,9 +144,48 @@ describe('EnrollmentService', () => {
       ).not.toHaveBeenCalled();
     });
 
+    it('starts the subscription in the month asked for, so a mid-year joiner owes from then', async () => {
+      mockPrisma.programEnrollment.create.mockResolvedValue(ENROLLMENT);
+
+      await service.createEnrollment('u1', 'fund', {
+        contributorId: 'p1',
+        expectedRate: '6000',
+        joinedFrom: { year: 2026, month: 6 },
+      });
+
+      expect(mockTermService.assertJoinable).toHaveBeenCalledWith({
+        year: 2026,
+        month: 6,
+      });
+      expect(mockTermService.addJoiningTerm).toHaveBeenCalledWith(
+        mockPrisma,
+        'u1',
+        'e1',
+        { year: 2026, month: 6 },
+        '6000',
+      );
+    });
+
+    it('refuses a joining month after this one before writing anything', async () => {
+      mockTermService.assertJoinable.mockImplementation(() => {
+        throw Object.assign(new Error('future'), {
+          errorCode: 'ENROLLMENT_TERM_IN_FUTURE',
+        });
+      });
+
+      await expect(
+        service.createEnrollment('u1', 'fund', {
+          contributorId: 'p1',
+          expectedRate: '6000',
+          joinedFrom: { year: 2099, month: 1 },
+        }),
+      ).rejects.toMatchObject({ errorCode: 'ENROLLMENT_TERM_IN_FUTURE' });
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+    });
+
     it('refuses to enroll anyone in a temporary program, which takes gifts without enrolling', async () => {
       await expect(
-        service.createEnrollment('camp', {
+        service.createEnrollment('u1', 'camp', {
           contributorId: 'p1',
           expectedRate: '0',
         }),
@@ -149,7 +203,7 @@ describe('EnrollmentService', () => {
       );
 
       await expect(
-        service.createEnrollment('fund', {
+        service.createEnrollment('u1', 'fund', {
           contributorId: 'p1',
           expectedRate: '1',
         }),
@@ -160,7 +214,7 @@ describe('EnrollmentService', () => {
   describe('updateEnrollment', () => {
     it('refuses a pledge or previous subscription on a temporary program’s donor row', async () => {
       await expect(
-        service.updateEnrollment('camp', 'e1', { expectedRate: '1200' }),
+        service.updateEnrollment('u1', 'camp', 'e1', { expectedRate: '1200' }),
       ).rejects.toMatchObject({ errorCode: 'ENROLLMENT_PROGRAM_TEMPORARY' });
       expect(mockPrisma.programEnrollment.update).not.toHaveBeenCalled();
     });
@@ -171,7 +225,7 @@ describe('EnrollmentService', () => {
         expectedRate: new Prisma.Decimal(7200),
       });
 
-      const result = await service.updateEnrollment('fund', 'e1', {
+      const result = await service.updateEnrollment('u1', 'fund', 'e1', {
         expectedRate: '7200',
       });
 
@@ -179,6 +233,24 @@ describe('EnrollmentService', () => {
         expectedRate: '7200.00',
         successCode: 'ENROLLMENT_UPDATE_SUCCESS',
       });
+      // The latest term takes the correction too, in the same transaction,
+      // so the history and the mirror never disagree.
+      expect(mockTermService.correctLatestRate).toHaveBeenCalledWith(
+        mockPrisma,
+        'u1',
+        ENROLLMENT,
+        '7200',
+      );
+    });
+
+    it('leaves the terms alone when only the previous subscription is corrected', async () => {
+      mockPrisma.programEnrollment.update.mockResolvedValue(ENROLLMENT);
+
+      await service.updateEnrollment('u1', 'fund', 'e1', {
+        previousSubscription: '1000',
+      });
+
+      expect(mockTermService.correctLatestRate).not.toHaveBeenCalled();
     });
   });
 
@@ -269,50 +341,8 @@ describe('EnrollmentService', () => {
     });
   });
 
-  describe('markEnrollmentDormant', () => {
-    it('flips ACTIVE to DORMANT with a conditional update scoped to the program', async () => {
-      mockPrisma.programEnrollment.updateMany.mockResolvedValue({ count: 1 });
-
-      await service.markEnrollmentDormant('fund', 'e1');
-
-      expect(mockPrisma.programEnrollment.updateMany).toHaveBeenCalledWith({
-        where: {
-          id: 'e1',
-          programId: 'fund',
-          status: 'ACTIVE',
-          program: { type: 'PERIODIC' },
-        },
-        data: { status: 'DORMANT' },
-      });
-    });
-
-    it('never makes a temporary program’s donor dormant', async () => {
-      mockPrisma.programEnrollment.updateMany.mockResolvedValue({ count: 0 });
-
-      await expect(
-        service.markEnrollmentDormant('camp', 'e1'),
-      ).rejects.toMatchObject({ errorCode: 'ENROLLMENT_PROGRAM_TEMPORARY' });
-    });
-
-    it('answers ENROLLMENT_ALREADY_DORMANT to the second of two clicks', async () => {
-      mockPrisma.programEnrollment.updateMany.mockResolvedValue({ count: 0 });
-
-      await expect(
-        service.markEnrollmentDormant('fund', 'e1'),
-      ).rejects.toMatchObject({ errorCode: 'ENROLLMENT_ALREADY_DORMANT' });
-    });
-  });
-
   describe('pending flows', () => {
     it.each([
-      [
-        'reactivateEnrollment',
-        () => service.reactivateEnrollment('fund', 'e1'),
-      ],
-      [
-        'scheduleRateChange',
-        () => service.scheduleRateChange('fund', 'e1', 2027, '1500'),
-      ],
       ['assignCollector', () => service.assignCollector('fund', 'e1', 'u2')],
     ])(
       '%s throws FEATURE_PENDING_CONFIRMATION until the fund confirms the rules',

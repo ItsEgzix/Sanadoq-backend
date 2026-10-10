@@ -1,10 +1,10 @@
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
+import { bookYearSchema } from '../../common/schemas/month.schema';
 
 export const eradatYearQuerySchema = z.object({
-  // Must fall inside the program's current cycle when it has one. Omitted:
-  // this year, clamped into the cycle.
-  year: z.coerce.number().int().min(2000).max(2100).optional(),
+  // Any year the books can hold. Omitted: this year.
+  year: bookYearSchema.optional(),
 });
 
 export class EradatYearQueryDto extends createZodDto(eradatYearQuerySchema) {}

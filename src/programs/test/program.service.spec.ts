@@ -12,8 +12,6 @@ const mockPrisma = {
   },
   payment: { count: jest.fn() },
   programEnrollment: { count: jest.fn() },
-  // findFirst/findMany: the current cycle, read beside every program read.
-  cycle: { count: jest.fn(), findFirst: jest.fn(), findMany: jest.fn() },
 };
 
 const FUND = {
@@ -22,7 +20,6 @@ const FUND = {
   type: 'PERIODIC' as const,
   isProtected: true,
   sortOrder: 0,
-  cycles: [],
 };
 const CAMPAIGN = {
   ...FUND,
@@ -43,8 +40,6 @@ describe('ProgramService', () => {
 
   beforeEach(() => {
     jest.resetAllMocks();
-    mockPrisma.cycle.findFirst.mockResolvedValue(null);
-    mockPrisma.cycle.findMany.mockResolvedValue([]);
     service = new ProgramService(mockPrisma as unknown as PrismaService);
   });
 
@@ -99,14 +94,13 @@ describe('ProgramService', () => {
     it('locks an ordinary program’s type once it has payments', async () => {
       mockPrisma.program.findFirst.mockResolvedValue(CAMPAIGN);
       mockPrisma.payment.count.mockResolvedValue(3);
-      mockPrisma.cycle.count.mockResolvedValue(0);
       mockPrisma.programEnrollment.count.mockResolvedValue(0);
 
       await expect(
         service.updateProgram('camp', { type: 'PERIODIC' }),
       ).rejects.toMatchObject({
         errorCode: 'PROGRAM_SHAPE_LOCKED',
-        meta: { payments: 3, cycles: 0 },
+        meta: { payments: 3 },
       });
       expect(mockPrisma.program.update).not.toHaveBeenCalled();
     });
@@ -117,7 +111,6 @@ describe('ProgramService', () => {
         type: 'PERIODIC',
       });
       mockPrisma.payment.count.mockResolvedValue(0);
-      mockPrisma.cycle.count.mockResolvedValue(0);
       mockPrisma.programEnrollment.count.mockResolvedValue(2);
 
       await expect(
@@ -129,10 +122,9 @@ describe('ProgramService', () => {
       expect(mockPrisma.program.update).not.toHaveBeenCalled();
     });
 
-    it('turns an empty temporary program periodic, which brings cycles and the grid with it', async () => {
+    it('turns an empty temporary program periodic, which brings the grid with it', async () => {
       mockPrisma.program.findFirst.mockResolvedValue(CAMPAIGN);
       mockPrisma.payment.count.mockResolvedValue(0);
-      mockPrisma.cycle.count.mockResolvedValue(0);
       mockPrisma.programEnrollment.count.mockResolvedValue(0);
       mockPrisma.program.update.mockResolvedValue({
         ...CAMPAIGN,
@@ -141,7 +133,7 @@ describe('ProgramService', () => {
 
       const result = await service.updateProgram('camp', { type: 'PERIODIC' });
 
-      expect(result).toMatchObject({ hasCycles: true, entryMode: 'MONTHLY' });
+      expect(result).toMatchObject({ entryMode: 'MONTHLY' });
     });
 
     it('turns a live-name clash into PROGRAM_NAME_TAKEN', async () => {

@@ -1,19 +1,15 @@
 import type { Prisma } from '../../generated/prisma/client';
-import {
-  roundMoney,
-  sumMoney,
-  toMoneyString,
-  ZERO,
-} from '../common/utils/money.util';
+import { sumMoney, toMoneyString, ZERO } from '../common/utils/money.util';
 import type { PaymentCellRow } from '../payments/payment.constant';
 import { toPaymentCellView } from '../payments/payment.util';
 
 /**
  * The books' arithmetic, as pure functions, always for one program at a
- * time. Each formula lives here once; the services only fetch rows and feed
- * them in. Where they sum in SQL instead (program-wide totals), they rely on
- * the same rule these functions apply — a star's amount is NULL — so both
- * paths agree.
+ * time. Each formula lives here once — or, for what a subscription owes, in
+ * src/enrollments/enrollment-term.util.ts — and the services only fetch rows
+ * and feed them in. Where they sum in SQL instead (program-wide totals), they
+ * rely on the same rule these functions apply — a star's amount is NULL — so
+ * both paths agree.
  */
 
 /**
@@ -36,12 +32,13 @@ export function yearlyTotal(
 }
 
 /**
- * running_total(enrollment) — الإجمالي — = previous_subscription +
- * SUM(yearly_total) over the program's running years: every cycle from its
- * first through the current one, or every year with payments for a program
- * without cycles (see ReadWindow.runningYears). previous_subscription is the
- * treasurer's typed figure for what was paid before this system held the
- * books — never recomputed, and never re-typed when a new cycle starts.
+ * running_total — الإجمالي, "the account since joining" — =
+ * previous_subscription + every payment the books hold, in any year: the
+ * workbook's BH column, previous plus every year on the sheet. So it is the
+ * same whichever year is on screen, and money paid ahead into next year's
+ * cells is already in it. previous_subscription is the treasurer's typed
+ * figure for what was paid before this system held the books — never
+ * recomputed.
  */
 export function runningTotal(
   previousSubscription: Prisma.Decimal,
@@ -51,26 +48,41 @@ export function runningTotal(
 }
 
 /**
- * collection_ratio(program, year) = SUM(expected_rate over the program's
- * enrollments) ÷ SUM(that year's payments by those enrolled contributors).
+ * collection_ratio(program, year) — نسبة التحصيل — = that year's payments by
+ * the program's subscribers ÷ what their pledges expected for the year
+ * (each subscription's months as a member, at its pledge — see owedFor).
+ * 0.70 means 70% collected. It is the workbook's own figure (الحساب: اجمالي
+ * التحصيل ÷ اجمالي معدل الاشتراك), so the app and the fund's reports quote the
+ * same number.
  *
  * Per program, never across programs — mirroring the workbook, which kept
  * its project rows out of the fund's ratio. And only pledge-backed money on
- * the actual side: a transfer from another program or a stranger's one-off
- * gift answers no enrollment's pledge, so counting it would make a program
- * look better collected than its pledges are. Both still count as the
- * program's revenue.
+ * the collected side: a transfer from another program or a stranger's
+ * one-off gift answers no subscriber's pledge, so counting it would make a
+ * program look better collected than its pledges are. Both still count as
+ * the program's revenue.
  *
- * The direction (expected over actual, so above 1 means under-collected)
- * follows the spec as written for the workbook. null when nothing pledged
- * was collected, rather than an infinity the UI would have to special-case.
+ * null when nothing was pledged, rather than an infinity the UI would have to
+ * special-case.
  */
 export function collectionRatio(
-  expectedTotal: Prisma.Decimal,
-  pledgedActualTotal: Prisma.Decimal,
+  collected: Prisma.Decimal,
+  expected: Prisma.Decimal,
 ): Prisma.Decimal | null {
-  if (pledgedActualTotal.isZero()) return null;
-  return expectedTotal.dividedBy(pledgedActualTotal);
+  if (expected.isZero()) return null;
+  return collected.dividedBy(expected);
+}
+
+/**
+ * What the year's pledges still wait for — اجمالي المتبقي — never below zero:
+ * a year collected beyond its pledges has nothing remaining, not a negative.
+ */
+export function remainingForYear(
+  expected: Prisma.Decimal,
+  collected: Prisma.Decimal,
+): Prisma.Decimal {
+  const remaining = expected.minus(collected);
+  return remaining.greaterThan(0) ? remaining : ZERO;
 }
 
 /**
@@ -80,8 +92,8 @@ export function collectionRatio(
  * day — the fund's rule (2026-10-02), so on 2 October a member is measured
  * through September.
  *
- * UTC, like CycleService's default year: the fund keeps no time zone, and the
- * difference is a few hours at the turn of a month.
+ * UTC, like every other "now" in the books: the fund keeps no time zone, and
+ * the difference is a few hours at the turn of a month.
  */
 export function monthsDue(year: number, now: Date): number {
   const thisYear = now.getUTCFullYear();
@@ -91,8 +103,9 @@ export function monthsDue(year: number, now: Date): number {
 }
 
 /**
- * arrears(enrollment, year) — العجز — = the yearly pledge's share for the
- * months due, less what the enrollment paid in that year; never below zero.
+ * arrears(enrollment, year) — العجز — = what the subscription owed for the
+ * months due (owedFor: only the months it was active, each at its pledge),
+ * less what it paid in that year; never below zero.
  *
  * The fund's rule (2026-10-02): one year at a time, so each January starts
  * from zero and an unpaid 2026 is not carried into 2027. Measured in money,
@@ -102,11 +115,9 @@ export function monthsDue(year: number, now: Date): number {
  * arrears — it is simply none.
  */
 export function arrears(
-  expectedRate: Prisma.Decimal,
-  dueMonths: number,
+  owed: Prisma.Decimal,
   paidInYear: Prisma.Decimal,
 ): Prisma.Decimal {
-  const owed = roundMoney(expectedRate.times(dueMonths).dividedBy(12));
   const short = owed.minus(paidInYear);
   return short.greaterThan(0) ? short : ZERO;
 }
@@ -124,77 +135,45 @@ export function monthRow<T extends { year: number; month: number | null }>(
 }
 
 /**
- * One line of a monthly grid for `year`: its twelve cells, that year's
- * total, every window year's total and the running total.
+ * One line of a monthly grid for `year`: its twelve cells, that year's total
+ * and the running total.
  *
- * openingTotal is what the running total starts from before the current
- * cycle's cells: an enrollment's previous subscription plus what it paid in
- * the program's earlier cycles. Transfer lines (another program paying in)
- * start from their earlier cycles only — a program's own opening balance is
- * not split across its payers.
+ * openingTotal is everything the running total holds besides this year's
+ * cells: an enrollment's previous subscription plus what it paid in every
+ * other year. Transfer lines (another program paying in) open on their other
+ * years only — a program's own opening balance is not split across its
+ * payers.
  */
 export function buildGridLine(
   cells: readonly PaymentCellRow[],
-  windowYears: readonly number[],
   year: number,
   openingTotal: Prisma.Decimal,
 ) {
-  const totals = new Map(
-    windowYears.map((windowYear) => [
-      windowYear,
-      yearlyTotal(cells, windowYear),
-    ]),
-  );
+  const yearTotal = yearlyTotal(cells, year);
   return {
     months: monthRow(cells, year).map(
       (cell) => cell && toPaymentCellView(cell),
     ),
-    ...summariseYears(totals, windowYears, year, openingTotal),
+    yearTotal: toMoneyString(yearTotal),
+    runningTotal: toMoneyString(runningTotal(openingTotal, [yearTotal])),
   };
 }
 
 /**
- * One enrollment's line in a dated ledger: the same totals as a grid line,
- * from per-year sums already computed in SQL, and no month cells.
+ * One donor's line in a dated ledger: the same totals as a grid line, from
+ * per-year sums already computed in SQL, and no month cells.
  */
 export function buildLedgerLine(
   yearSums: ReadonlyMap<number, Prisma.Decimal> | undefined,
-  windowYears: readonly number[],
   year: number,
   previousSubscription: Prisma.Decimal,
 ) {
+  const sums = yearSums ?? new Map<number, Prisma.Decimal>();
   return {
     months: null,
-    ...summariseYears(
-      yearSums ?? new Map(),
-      windowYears,
-      year,
-      previousSubscription,
-    ),
-  };
-}
-
-function summariseYears(
-  totals: ReadonlyMap<number, Prisma.Decimal>,
-  windowYears: readonly number[],
-  year: number,
-  openingTotal: Prisma.Decimal,
-) {
-  const yearTotals = windowYears.map((windowYear) => ({
-    year: windowYear,
-    total: totals.get(windowYear) ?? ZERO,
-  }));
-  return {
-    yearTotal: toMoneyString(totals.get(year)),
-    yearTotals: yearTotals.map((entry) => ({
-      year: entry.year,
-      total: toMoneyString(entry.total),
-    })),
+    yearTotal: toMoneyString(sums.get(year)),
     runningTotal: toMoneyString(
-      runningTotal(
-        openingTotal,
-        yearTotals.map((entry) => entry.total),
-      ),
+      runningTotal(previousSubscription, [...sums.values()]),
     ),
   };
 }

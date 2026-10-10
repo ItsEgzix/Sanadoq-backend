@@ -11,9 +11,10 @@ import { validateEnv } from './common/config/env.schema';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { ResponseTransformInterceptor } from './common/interceptors/response-transform.interceptor';
 import { FALLBACK_LOCALE } from './common/utils/translate.util';
-import { CycleModule } from './cycles/cycle.module';
+import { DashboardModule } from './dashboard/dashboard.module';
 import { EnrollmentModule } from './enrollments/enrollment.module';
 import { EradatModule } from './eradat/eradat.module';
+import { ExpenseModule } from './expenses/expense.module';
 import { PaymentModule } from './payments/payment.module';
 import { ContributorModule } from './contributors/contributor.module';
 import { PrismaModule } from './prisma/prisma.module';
@@ -45,11 +46,12 @@ import { UserModule } from './users/user.module';
     AuthModule,
     UserModule,
     ProgramModule,
-    CycleModule,
     ContributorModule,
     EnrollmentModule,
     PaymentModule,
     EradatModule,
+    ExpenseModule,
+    DashboardModule,
   ],
   providers: [
     // Every DTO is a nestjs-zod class; this pipe is what runs their schemas

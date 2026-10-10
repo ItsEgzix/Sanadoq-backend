@@ -1,14 +1,12 @@
 /**
  * Seeds a demo fund in the Contributor / Program shape, so every screen has
  * something to show:
- *   - the protected fund program (made by the migration) with a 4-year cycle,
- *     2026–2029, and two dozen members with mixed habits — monthly, quarterly
- *     and annual lumps with ★ months, gaps, two dormant;
- *   - مواساة, its own monthly grid and cycle, with some of the same
- *     contributors at different rates, plus the fund's monthly contribution as
- *     a transfer row;
- *   - جامع السعيد, a smaller standing program in the same cycle, paid
- *     monthly with gaps;
+ *   - the protected fund program (made by the migration) with two dozen
+ *     members with mixed habits — monthly, quarterly and annual lumps with ★
+ *     months, gaps, two dormant;
+ *   - مواساة, its own monthly grid, with some of the same contributors at
+ *     different rates, plus the fund's monthly contribution as a transfer row;
+ *   - جامع السعيد, a smaller standing program, paid monthly with gaps;
  *   - a Ramadan campaign with one-off donors who are in no directory, and a
  *     donation from the fund;
  *   - two invented look-alike pairs, raised as duplicate flags for review —
@@ -27,12 +25,15 @@
 import 'dotenv/config';
 import type { Prisma, PrismaClient } from '../../generated/prisma/client';
 import { findDuplicatePairs } from '../contributors/contributor-duplicate.util';
-import { matchContributorsByAccount, openDatabase } from './script.util';
+import {
+  matchContributorsByAccount,
+  openDatabase,
+  writeMissingTerms,
+} from './script.util';
 
 const APPLY = process.argv.includes('--apply');
 const BATCH = 500;
 const LAST_PAID = { year: 2026, month: 9 };
-const CYCLE = { startYear: 2026, lengthYears: 4, endYear: 2029 };
 
 type Habit = 'MONTHLY' | 'QUARTERLY' | 'ANNUAL' | 'IRREGULAR';
 
@@ -379,26 +380,6 @@ async function main() {
       }
     }
 
-    // Cycles — every periodic program runs in one; current only when the
-    // program has none.
-    for (const key of ['fund', MWA, JAMEA]) {
-      const programId = programs.get(key);
-      const current = programId
-        ? await prisma.cycle.findFirst({
-            where: { programId, isCurrent: true },
-          })
-        : null;
-      console.log(
-        `Cycle ${CYCLE.startYear}–${CYCLE.endYear} for ${key === 'fund' ? fund.name : key}: ${current ? 'a current cycle exists' : 'create'}`,
-      );
-      if (APPLY && programId && !current) {
-        await prisma.cycle.createMany({
-          data: [{ programId, ...CYCLE, isCurrent: true }],
-          skipDuplicates: true,
-        });
-      }
-    }
-
     // Contributors — matched to this script's own earlier rows by account
     // number and name. A number someone else already holds is skipped, never
     // linked: the demo must not attach invented payments to a real contributor.
@@ -445,7 +426,7 @@ async function main() {
           contributorId,
           programId: fund.id,
           expectedRate: money(contributor.fundRate),
-          // The typed-in figure for the years before this cycle.
+          // The typed-in figure for the years before these books.
           previousSubscription: money(
             Math.round((contributor.fundRate * (2 + random() * 8)) / 50) * 50,
           ),
@@ -490,6 +471,14 @@ async function main() {
       console.log(
         `  inserted ${count}, ${enrollments.length - count} already present`,
       );
+      // Every subscription needs the month it started; the demo's members
+      // joined when their account numbers say.
+      let terms = 0;
+      for (const key of ['fund', MWA, JAMEA]) {
+        const programId = key === 'fund' ? fund.id : programs.get(key);
+        if (programId) terms += await writeMissingTerms(prisma, programId);
+      }
+      console.log(`  ${terms} joining terms written`);
     }
 
     // Payments — cell keys and deterministic idempotency keys dedupe.

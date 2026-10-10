@@ -1,19 +1,23 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// Sanadoq — Eradat (الإيرادات) revenue books
+// Sanadoq — the fund's books: revenue (الإيرادات) and expenses (المصروفات)
 //
 // Layout
 //   1. Access        Role (named permission bundles) and User
 //   2. Contributors  Contributor — one row per human, system-wide — and the
 //                    ContributorDuplicateFlag review queue
 //   3. Programs      Program — every revenue stream (the fund's membership,
-//                    مواساة, جامع السعيد, each campaign) is a row here — and
-//                    a periodic program's own Cycle rows
+//                    مواساة, جامع السعيد, each campaign) is a row here
 //   4. Enrollment    ProgramEnrollment — a Contributor's participation in one
 //                    Program: a subscription with its pledge in a PERIODIC
-//                    program, a pledge-free donor row in a TEMPORARY one
+//                    program, a pledge-free donor row in a TEMPORARY one — and
+//                    a subscription's dated EnrollmentTerm history
 //   5. Payments      Payment — money a Program received
+//   6. Expenses      ExpenseLine and Expense — money a Program paid out
 //
 // Rules that span models
+//   - There are no cycles. Every year stands on its own and any year can be
+//     written: the fund opens a year when it comes and goes back to fix old
+//     ones. Reports pick a year, or a range of them.
 //   - A Payment has exactly one payer: a Contributor, a free-text name, or
 //     another Program (CHECK "Payment_exactly_one_payer"). A Contributor payer
 //     has a ProgramEnrollment in the receiving program — the composite FK
@@ -22,25 +26,26 @@
 //     temporary program's donor row comes with their first gift and goes
 //     with their last (EnrollmentService.addDonor / removeDonorIfEmpty).
 //   - A Payment is either a monthly cell (year + month) or a dated entry
-//     (paymentDate, year derived from it). A PERIODIC program runs in cycles
-//     and keeps the monthly grid; a TEMPORARY one has no cycles and keeps a
-//     dated ledger. See runsInCycles() and programEntryMode() in
-//     src/programs/program.util.ts.
+//     (paymentDate, year derived from it). A PERIODIC program — an annual
+//     subscription its members renew — keeps the monthly grid; a TEMPORARY
+//     one — open donations, from anyone — keeps a dated ledger. See
+//     programEntryMode() in src/programs/program.util.ts.
 //   - Only unstarred payments carry money. A starred cell (★, "paid but booked
 //     under another month") has amount NULL by constraint, so every
 //     SUM(amount) skips it without remembering the rule.
-//   - A Program → Program payment (payerProgramId) is revenue for the receiving
-//     program only. It is never summed into the payer's revenue: every total
-//     filters on programId, never on payerProgramId.
+//   - A Program → Program payment (payerProgramId) is one transaction seen
+//     from both sides: revenue of the receiving program (programId) and an
+//     expense of the paying one, read from the same row — never stored twice.
+//     Revenue totals filter on programId, never on payerProgramId.
 //   - Exactly one Program is protected — the fund's membership program, made
 //     by the baseline migration. Its type is frozen and it can never be
 //     deleted: ProgramService enforces this, and the trigger
 //     "Program_guard_protected" backs it up against raw SQL.
 //   - Money is Decimal(14, 2) in the fund's single booking currency. Which
 //     currency is not yet confirmed, so no column carries a currency suffix.
-//   - CHECKs, partial unique indexes, the cycle overlap exclusion, the
-//     composite enrollment FK's ON UPDATE CASCADE and the protection trigger
-//     exist only in migration SQL. Each is named next to what it guards.
+//   - CHECKs, partial unique indexes, the composite FKs' ON UPDATE CASCADE and
+//     the protection trigger exist only in migration SQL. Each is named next
+//     to what it guards.
 // ═══════════════════════════════════════════════════════════════════════════
 
 generator client {
@@ -87,8 +92,10 @@ model User {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  role                   Role                  @relation(fields: [roleKey], references: [key], onUpdate: Cascade, onDelete: Restrict)
+  role                   Role                       @relation(fields: [roleKey], references: [key], onUpdate: Cascade, onDelete: Restrict)
   recordedPayments       Payment[]
+  recordedExpenses       Expense[]
+  recordedTerms          EnrollmentTerm[]
   resolvedDuplicateFlags ContributorDuplicateFlag[]
 
   @@index([roleKey])
@@ -122,8 +129,8 @@ model Contributor {
 
   // SetNull: a merge target is never hard-deleted in practice, but if one
   // were, the merged row must survive as a retired number.
-  mergedInto  Contributor?             @relation("ContributorMerge", fields: [mergedIntoId], references: [id], onDelete: SetNull)
-  mergedFrom  Contributor[]            @relation("ContributorMerge")
+  mergedInto  Contributor?               @relation("ContributorMerge", fields: [mergedIntoId], references: [id], onDelete: SetNull)
+  mergedFrom  Contributor[]              @relation("ContributorMerge")
   enrollments ProgramEnrollment[]
   payments    Payment[]
   flagsAsA    ContributorDuplicateFlag[] @relation("DuplicateFlagContributorA")
@@ -143,27 +150,27 @@ enum DuplicateFlagStatus {
 /// near-duplicates (same name, different account numbers in different sheets)
 /// and real namesakes, and only someone who knows the fund can tell them apart.
 model ContributorDuplicateFlag {
-  id           String              @id @default(uuid())
+  id             String              @id @default(uuid())
   // Stored in a fixed order (CHECK "ContributorDuplicateFlag_ordered_pair") so
   // the unique index below sees (a, b) and (b, a) as the same pair.
-  contributorAId    String
-  contributorBId    String
+  contributorAId String
+  contributorBId String
   // DuplicateReason codes from src/contributors/contributor-duplicate.util.ts —
   // why the scan thought these match, shown to the reviewer.
-  reasons      String[]
-  status       DuplicateFlagStatus @default(OPEN)
-  resolvedById String?
-  resolvedAt   DateTime?
-  createdAt    DateTime            @default(now())
-  updatedAt    DateTime            @updatedAt
+  reasons        String[]
+  status         DuplicateFlagStatus @default(OPEN)
+  resolvedById   String?
+  resolvedAt     DateTime?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
 
   // Cascade: a flag is about its two contributors and means nothing without
   // them. Contributors are soft-deleted, so this fires only on a deliberate
   // hard delete.
-  contributorA    Contributor @relation("DuplicateFlagContributorA", fields: [contributorAId], references: [id], onDelete: Cascade)
-  contributorB    Contributor @relation("DuplicateFlagContributorB", fields: [contributorBId], references: [id], onDelete: Cascade)
+  contributorA Contributor @relation("DuplicateFlagContributorA", fields: [contributorAId], references: [id], onDelete: Cascade)
+  contributorB Contributor @relation("DuplicateFlagContributorB", fields: [contributorBId], references: [id], onDelete: Cascade)
   // SetNull: the decision outlives the account of whoever made it.
-  resolvedBy User?  @relation(fields: [resolvedById], references: [id], onDelete: SetNull)
+  resolvedBy   User?       @relation(fields: [resolvedById], references: [id], onDelete: SetNull)
 
   // The dedupe for repeated scans, and contributorAId's FK index.
   @@unique([contributorAId, contributorBId])
@@ -174,8 +181,8 @@ model ContributorDuplicateFlag {
 // ── Programs ───────────────────────────────────────────────────────────────
 
 enum ProgramType {
-  PERIODIC // a standing subscription in cycles — the fund's membership, مواساة
-  TEMPORARY // one need, collected once — a hospital case, this Ramadan's families
+  PERIODIC // an annual subscription members renew — the fund's membership, مواساة
+  TEMPORARY // open donations, from anyone, inside the fund or not — a hospital case, this Ramadan's families
 }
 
 /// Any revenue stream. The fund's membership program is a row like every
@@ -185,9 +192,8 @@ model Program {
   // Unique among live programs, case-insensitively — partial unique index
   // "Program_live_name_key". CHECK "Program_name_not_blank".
   name        String
-  // Also decides cycles: a PERIODIC program always runs in them, a TEMPORARY
-  // one never does (runsInCycles in src/programs/program.util.ts). There is
-  // no separate switch — migration 20261002150000 dropped hasCycles.
+  // Decides how payments are written down (programEntryMode in
+  // src/programs/program.util.ts) and whether anyone subscribes at all.
   type        ProgramType
   // True only on the fund's membership program, set by the baseline
   // migration and never by the API. At most one row — partial unique index
@@ -199,40 +205,13 @@ model Program {
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
 
-  cycles           Cycle[]
   enrollments      ProgramEnrollment[]
   receivedPayments Payment[]           @relation("PaymentReceiver")
   paymentsMade     Payment[]           @relation("PaymentPayerProgram")
+  expenseLines     ExpenseLine[]
+  expenses         Expense[]
 
   @@index([sortOrder])
-}
-
-/// A periodic program's subscription cycle (temporary programs have none —
-/// CycleService refuses them). Lengths are data, never a constant: the
-/// fund has run 5-year, then 4-year cycles and is weighing 3. endYear is
-/// stored so payment reads can filter `year BETWEEN startYear AND endYear` in
-/// SQL; CHECK "Cycle_end_matches_length" stops it drifting.
-model Cycle {
-  id          String   @id @default(uuid())
-  programId   String
-  startYear   Int // CHECK "Cycle_start_year_range": 2000..2100
-  lengthYears Int // CHECK "Cycle_length_range": 1..10
-  endYear     Int // CHECK "Cycle_end_matches_length": startYear + lengthYears - 1
-  // The cycle the program's grid and running totals read from. At most one
-  // per program (partial unique index "Cycle_single_current_per_program");
-  // zero is allowed so a program can exist before its first cycle.
-  isCurrent   Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  // Cascade: a cycle means nothing without its program. Programs are
-  // soft-deleted, so this fires only on a deliberate hard delete.
-  program Program @relation(fields: [programId], references: [id], onDelete: Cascade)
-
-  // EXCLUDE "Cycle_no_overlap_per_program" also forbids two cycles of one
-  // program sharing a year — otherwise "which cycle is 2027 in" has two answers.
-  // Also programId's FK index.
-  @@unique([programId, startYear])
 }
 
 // ── Enrollment ─────────────────────────────────────────────────────────────
@@ -245,24 +224,32 @@ enum EnrollmentStatus {
 /// A Contributor's participation in one Program. Hard-deleted only while it has
 /// no payments (a mistaken enrollment); with payments it can only go dormant.
 ///
+/// In a PERIODIC program its pledge and status have a dated history in
+/// EnrollmentTerm; status and expectedRate here mirror the latest term, which
+/// is always the one in effect today, so lists, filters and counts read one
+/// row instead of a history.
+///
 /// In a TEMPORARY program the row is a donor row instead: nobody enrolls, it
-/// carries no pledge or previous subscription (both stay 0, ACTIVE), and the
-/// payment path adds and removes it beside the donor's gifts. It exists only
-/// because Payment's composite FK needs a row under every contributor payment.
+/// carries no pledge or previous subscription (both stay 0, ACTIVE) and no
+/// terms, and the payment path adds and removes it beside the donor's gifts.
+/// It exists only because Payment's composite FK needs a row under every
+/// contributor payment.
 model ProgramEnrollment {
   id                   String           @id @default(uuid())
-  contributorId             String
+  contributorId        String
   programId            String
   // The pledged yearly amount for this contributor in this program (معدل
-  // الاشتراك السنوي) — expected revenue. Never derived from payments: it is the
-  // yardstick payments are measured against. Zero means no pledge — always so
-  // in a temporary program. CHECK "ProgramEnrollment_expected_rate_non_negative".
+  // الاشتراك السنوي) in effect today — the latest term's. Never derived from
+  // payments: it is the yardstick payments are measured against. Zero means
+  // no pledge — always so in a temporary program.
+  // CHECK "ProgramEnrollment_expected_rate_non_negative".
   expectedRate         Decimal          @db.Decimal(14, 2)
   // الاشتراك السابق — everything this contributor paid this program since
   // joining and before this system held its books, typed in from the old
   // books. Never recomputed: the payments it summarises predate this system.
   // Periodic programs only.
   previousSubscription Decimal          @default(0) @db.Decimal(14, 2)
+  // In effect today — the latest term's.
   status               EnrollmentStatus @default(ACTIVE)
   createdAt            DateTime         @default(now())
   updatedAt            DateTime         @updatedAt
@@ -270,14 +257,53 @@ model ProgramEnrollment {
   // Restrict on both: an enrollment carries a pledge and anchors payments, so
   // neither side may vanish under it. Contributors and programs are
   // soft-deleted.
-  contributor   Contributor    @relation(fields: [contributorId], references: [id], onDelete: Restrict)
-  program  Program   @relation(fields: [programId], references: [id], onDelete: Restrict)
-  payments Payment[]
+  contributor Contributor      @relation(fields: [contributorId], references: [id], onDelete: Restrict)
+  program     Program          @relation(fields: [programId], references: [id], onDelete: Restrict)
+  payments    Payment[]
+  terms       EnrollmentTerm[]
 
   // One enrollment per contributor per program; also the target of Payment's
   // composite FK, and contributorId's FK index.
   @@unique([contributorId, programId])
   @@index([programId, status])
+}
+
+/// One stretch of a periodic subscription: from (fromYear, fromMonth) until
+/// the next term begins, the subscriber was ACTIVE or DORMANT at this yearly
+/// pledge. The first term is the month they joined; before it they owed
+/// nothing. العجز and a year's expected total count only the months a term
+/// says were ACTIVE, each at that term's pledge ÷ 12 — so someone who joins in
+/// June owes from June, someone frozen in May stops owing from May, and a
+/// pledge raised in July counts at the new rate from July (see
+/// src/enrollments/enrollment-term.util.ts).
+///
+/// Terms are only appended in date order, and never start after the current
+/// month (EnrollmentTermService): the latest term is the one in effect today,
+/// which is what ProgramEnrollment.status and expectedRate mirror. A change
+/// in the same month as the latest term replaces it instead of stacking.
+model EnrollmentTerm {
+  id           String           @id @default(uuid())
+  enrollmentId String
+  fromYear     Int // CHECK "EnrollmentTerm_from_year_range": 2000..2100, like a payment's year
+  fromMonth    Int // CHECK "EnrollmentTerm_from_month_range": 1..12
+  status       EnrollmentStatus
+  // CHECK "EnrollmentTerm_expected_rate_non_negative".
+  expectedRate Decimal          @db.Decimal(14, 2)
+  // Who made the change; null on the terms a migration or import wrote.
+  recordedById String?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  // Cascade: a term means nothing without its enrollment, and an enrollment
+  // is only ever hard-deleted while it has no payments — a mistake.
+  enrollment ProgramEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  // SetNull: the history outlives the account of whoever typed it in.
+  recordedBy User?             @relation(fields: [recordedById], references: [id], onDelete: SetNull)
+
+  // One term per month — a second change in that month replaces the first —
+  // and enrollmentId's FK index.
+  @@unique([enrollmentId, fromYear, fromMonth])
+  @@index([recordedById])
 }
 
 // ── Payments ───────────────────────────────────────────────────────────────
@@ -290,17 +316,16 @@ model Payment {
   programId         String
   // ── The payer: exactly one of these three — CHECK "Payment_exactly_one_payer".
   // A registered, enrolled contributor.
-  contributorId          String?
+  contributorId     String?
   // Someone not in the system at all — a one-off campaign donor. Dated
   // entries only (CHECK "Payment_freetext_is_dated"): a stranger has no row
   // in a monthly grid.
   payerNameFreetext String?
   // Another program paying out of its own funds — e.g. the fund donating to a
-  // campaign. Revenue for programId only; never counted toward the payer's
-  // revenue or collection ratio. CHECK "Payment_not_self_transfer".
-  // TODO(expenses): once the Expenses module exists, the same transaction must
-  // also appear as an expense on payerProgramId, linked to this row, so the
-  // payer's books balance. Today it is visible only from the receiving side.
+  // campaign. Revenue for programId only, never toward the payer's revenue or
+  // collection ratio; the payer's expense sheet reads this same row as money
+  // it paid out (ExpenseService), so the transaction is booked once and seen
+  // from both sides. CHECK "Payment_not_self_transfer".
   payerProgramId    String?
   // ── The amount
   // NULL exactly when starred, positive otherwise —
@@ -328,7 +353,7 @@ model Payment {
   // Restrict throughout: a payment is part of the books and must never vanish
   // because something it points at was removed.
   program      Program            @relation("PaymentReceiver", fields: [programId], references: [id], onDelete: Restrict)
-  contributor       Contributor?            @relation(fields: [contributorId], references: [id], onDelete: Restrict)
+  contributor  Contributor?       @relation(fields: [contributorId], references: [id], onDelete: Restrict)
   payerProgram Program?           @relation("PaymentPayerProgram", fields: [payerProgramId], references: [id], onDelete: Restrict)
   // The payer must be enrolled in the receiving program. ON UPDATE CASCADE (set
   // in migration SQL; Prisma calls it onUpdate) is what lets a duplicate merge
@@ -348,5 +373,71 @@ model Payment {
   @@index([programId, year])
   @@index([contributorId])
   @@index([payerProgramId, year])
+  @@index([recordedById])
+}
+
+// ── Expenses ───────────────────────────────────────────────────────────────
+
+/// One row of a program's expense sheet (المصروفات): a beneficiary or a
+/// purpose — a family the program supports every month, the mosque
+/// caretaker's wage, one hospital case — with its payouts as monthly cells,
+/// like the workbook's expense sheets. Not a Contributor: the people a
+/// program supports are not its payers, and the fund keeps no more about
+/// them than a name.
+///
+/// Hard-deleted, and only while it has no expenses (a mistaken line); once
+/// money went out under it, it stays — an empty year is simply no cells.
+model ExpenseLine {
+  id        String   @id @default(uuid())
+  programId String
+  name      String // CHECK "ExpenseLine_name_not_blank"
+  // The workbook's group heading — مصروفات جامع السعيد, دعم حالات مرضية,
+  // أخرى. Free text, so each program keeps its own headings; null when the
+  // program does not group its lines. CHECK "ExpenseLine_category_not_blank".
+  category  String?
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Restrict: a program is soft-deleted, and its expense sheet must survive a
+  // restore.
+  program  Program   @relation(fields: [programId], references: [id], onDelete: Restrict)
+  expenses Expense[]
+
+  // The target of Expense's composite FK, which pins every cell to its
+  // line's program.
+  @@unique([id, programId])
+  @@index([programId, sortOrder])
+}
+
+/// Money a program paid out: one cell per line per month. An empty cell has
+/// no row at all, like a payment cell, and clearing one deletes it.
+model Expense {
+  id           String   @id @default(uuid())
+  // The paying program, stored beside the line so every total groups on
+  // (programId, year) without a join. The composite FK keeps it equal to
+  // the line's program.
+  programId    String
+  lineId       String
+  year         Int // CHECK "Expense_year_range": 2000..2100
+  month        Int // CHECK "Expense_month_range": 1..12
+  // CHECK "Expense_amount_positive": an empty cell is the zero.
+  amount       Decimal  @db.Decimal(14, 2)
+  // Who last wrote this row.
+  recordedById String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Restrict: an expense is part of the books.
+  program    Program     @relation(fields: [programId], references: [id], onDelete: Restrict)
+  line       ExpenseLine @relation(fields: [lineId, programId], references: [id, programId], onDelete: Restrict)
+  // SetNull: the expense outlives the account of whoever typed it in.
+  recordedBy User?       @relation(fields: [recordedById], references: [id], onDelete: SetNull)
+
+  // One cell per line per month — the constraint is the dedupe, so saving a
+  // cell twice rewrites it.
+  @@unique([lineId, year, month])
+  // Every summary reads one program's year.
+  @@index([programId, year])
   @@index([recordedById])
 }

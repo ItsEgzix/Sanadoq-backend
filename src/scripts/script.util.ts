@@ -1,7 +1,16 @@
 import { PrismaPg } from '@prisma/adapter-pg';
-import { PrismaClient } from '../../generated/prisma/client';
+import {
+  PrismaClient,
+  type EnrollmentStatus,
+  type Prisma,
+} from '../../generated/prisma/client';
 import { findDuplicatePairs } from '../contributors/contributor-duplicate.util';
 import { CONTRIBUTOR_SCAN_CAP } from '../contributors/contributor.constant';
+import {
+  joinedFromAccountNumber,
+  monthIndex,
+  type MonthRef,
+} from '../enrollments/enrollment-term.util';
 
 /**
  * Shared by the one-off scripts: open a client on DATABASE_URL (and
@@ -135,4 +144,79 @@ export function describeDatabase(url: string, schema?: string): string {
   } catch {
     return '(unparseable database URL)';
   }
+}
+
+/** Where an imported subscription starts, and when it was frozen, if ever. */
+export interface TermPlan {
+  joined: MonthRef;
+  dormantFrom: MonthRef | null;
+}
+
+// The month the backfill in migration 20261010110000_enrollment_terms
+// freezes a dormant subscription from when nothing better is known: January
+// 2026, the first year these books hold.
+const DEFAULT_DORMANT_FROM: MonthRef = { year: 2026, month: 1 };
+
+interface TermlessEnrollment {
+  id: string;
+  contributorId: string;
+  status: EnrollmentStatus;
+  expectedRate: Prisma.Decimal;
+  accountNumber: string;
+}
+
+/**
+ * Writes the joining terms of every subscription in a periodic program that
+ * has none yet — what an import's createMany left without history. The
+ * same shape the migration backfilled: ACTIVE from the month joined, at the
+ * pledge it holds, and for a dormant one DORMANT from the month it was
+ * frozen (or, frozen no later than it joined, DORMANT from the start).
+ * `plan` gives a row's months; without one, the join comes from the account
+ * number and a dormancy starts in January 2026, as in the migration.
+ *
+ * Re-runnable: only enrollments with no terms at all are touched, so a
+ * history a manager has added to since is never written over.
+ */
+export async function writeMissingTerms(
+  prisma: Pick<PrismaClient, 'programEnrollment' | 'enrollmentTerm'>,
+  programId: string,
+  plan?: (enrollment: TermlessEnrollment) => TermPlan | undefined,
+): Promise<number> {
+  const termless = await prisma.programEnrollment.findMany({
+    where: { programId, program: { type: 'PERIODIC' }, terms: { none: {} } },
+    select: {
+      id: true,
+      contributorId: true,
+      status: true,
+      expectedRate: true,
+      contributor: { select: { accountNumber: true } },
+    },
+  });
+  const terms: Prisma.EnrollmentTermCreateManyInput[] = [];
+  for (const { contributor, ...enrollment } of termless) {
+    const row = { ...enrollment, accountNumber: contributor.accountNumber };
+    const planned = plan?.(row) ?? {
+      joined: joinedFromAccountNumber(row.accountNumber),
+      dormantFrom: row.status === 'DORMANT' ? DEFAULT_DORMANT_FROM : null,
+    };
+    const dormantFrom = row.status === 'DORMANT' ? planned.dormantFrom : null;
+    const frozenAtStart =
+      dormantFrom !== null &&
+      monthIndex(dormantFrom) <= monthIndex(planned.joined);
+    const term = (from: MonthRef, status: EnrollmentStatus) => ({
+      enrollmentId: row.id,
+      fromYear: from.year,
+      fromMonth: from.month,
+      status,
+      expectedRate: row.expectedRate,
+    });
+    terms.push(term(planned.joined, frozenAtStart ? 'DORMANT' : 'ACTIVE'));
+    if (dormantFrom && !frozenAtStart) terms.push(term(dormantFrom, 'DORMANT'));
+  }
+  if (terms.length === 0) return 0;
+  const { count } = await prisma.enrollmentTerm.createMany({
+    data: terms,
+    skipDuplicates: true,
+  });
+  return count;
 }

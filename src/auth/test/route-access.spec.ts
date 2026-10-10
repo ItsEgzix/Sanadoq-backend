@@ -1,8 +1,9 @@
 import { PATH_METADATA } from '@nestjs/common/constants';
 import { ACCESS_METADATA } from '../../common/decorators/access.decorator';
-import { CycleController } from '../../cycles/cycle.controller';
+import { DashboardController } from '../../dashboard/dashboard.controller';
 import { EnrollmentController } from '../../enrollments/enrollment.controller';
 import { EradatController } from '../../eradat/eradat.controller';
+import { ExpenseController } from '../../expenses/expense.controller';
 import { PaymentController } from '../../payments/payment.controller';
 import { ContributorDuplicateController } from '../../contributors/contributor-duplicate.controller';
 import { ContributorController } from '../../contributors/contributor.controller';
@@ -14,12 +15,13 @@ const CONTROLLERS = [
   AuthController,
   UserController,
   ProgramController,
-  CycleController,
   ContributorDuplicateController,
   ContributorController,
   EnrollmentController,
   PaymentController,
   EradatController,
+  ExpenseController,
+  DashboardController,
 ];
 
 function routeHandlers(controller: new (...args: never[]) => unknown) {
