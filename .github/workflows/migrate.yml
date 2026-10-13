@@ -1,7 +1,7 @@
 # Applies merged migrations to the production database (Neon).
 #
 # Runs when a push to master touches prisma/migrations/, and waits in the
-# `production` environment until the owner approves it in the Actions tab.
+# `neon-production` environment until the owner approves it in the Actions tab.
 # DATABASE_URL is a secret of that environment only, so no pull request, no
 # other job and no developer machine ever holds the production credentials.
 #
@@ -27,7 +27,8 @@ jobs:
   migrate:
     name: prisma migrate deploy
     runs-on: ubuntu-latest
-    environment: production
+    # Not "Production": that environment is Vercel's, for its deploy records.
+    environment: neon-production
     timeout-minutes: 15
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
