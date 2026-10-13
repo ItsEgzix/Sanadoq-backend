@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Sanadoq board
+    url: https://github.com/users/ItsEgzix/projects/2
+    about: Every task for the backend and the frontend, Backlog → Done.
+  - name: Frontend issues
+    url: https://github.com/ItsEgzix/Sanadoq-frontend/issues/new/choose
+    about: Screens, wording and client behaviour live in the frontend repo.

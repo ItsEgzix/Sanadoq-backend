@@ -60,7 +60,11 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 /generated/prisma
 
 
-.vercel
-.claude
 .windsurf
 .agents
+
+# Claude Code: the team shares .claude/settings.json and .claude/skills/.
+# Personal overrides stay local, and so do the Prisma skills installed from
+# skills-lock.json (third-party; restore them with the skills CLI).
+.claude/settings.local.json
+.claude/skills/prisma-*/
