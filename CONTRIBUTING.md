@@ -62,30 +62,49 @@ nothing reaches `master` except through a pull request with green CI.
 7. **Read** the backend [README](README.md) (*How the books work* is the
    domain), then `AGENTS.md` in each repo.
 
-## Every task
+## Every task — just ask Claude
 
-```
-Board (Ready) → /start-task 42 → code → /open-pr → CI + Claude review → merge → Vercel deploys
+Open Claude Code **in the repo you are changing** (`cd backend` then
+`claude`, or open the `backend` folder in VS Code) and say what you want in
+your own words: *"expense lines need a category"*, *"pick up the next Ready
+card"*, *"the dashboard total is wrong in Arabic"*. Claude follows the team
+protocol (`work-protocol` skill) for you:
+
+```text
+finds the issue on the board, or files it → branch linked to it → card "In progress"
+→ builds it with this repo's rules → runs the CI checks and tries it for real
+→ opens the PR (template, labels, card "In review") → watches CI and fixes it
+→ answers the automatic review → tells you what is left
 ```
 
-1. **Pick** a card from **Ready** — or ask Claude: `/start-task`. It assigns
-   you, creates the branch `42-short-name` linked to the issue, and moves the
-   card to **In progress**.
-2. **Build** it. Claude loads this repo's skills by itself; the rules that
-   matter most are in `AGENTS.md`.
-3. **Open the PR** with `/open-pr`: it runs the CI checks locally, fills the
-   template, labels it, moves the card to **In review**, and opens the
-   follow-up issue in the other repo if the API changed.
-4. **CI** must be green. **Claude** reviews the PR once it opens; ask for
-   another pass with `@claude review`. A person reads it too.
-5. **Merge** with *Squash and merge*. The issue closes, the card moves to
-   **Done**, the branch is deleted, Vercel deploys.
-6. **Migrations** (`migration` label): after the merge, *Migrate production
+It stops to ask only when something is genuinely yours (or the fund's) to
+decide: a rule about money, a migration that changes existing data, an API
+change, removing a feature. It never merges unless you ask.
+
+What is left for people:
+
+1. **Review** the PR — read the diff and Claude's review; ask for another
+   pass with `@claude review`.
+2. **Merge** with *Squash and merge* once CI is green. The issue closes, the
+   card moves to **Done**, the branch is deleted, Vercel deploys.
+3. **Migrations** (`migration` label): after the merge, *Migrate production
    database* waits in the Actions tab until the owner approves it. The task
    is done once it has run.
 
-New work goes on the board with `/new-task` (or the issue forms). Questions
-only the fund can answer become draft cards titled `Decision: …`.
+Claude refuses to edit tracked files while a repo is on `master` — that is
+the guard doing its job, not an error. If you prefer to drive a step
+yourself, the steps are also commands: `/new-task`, `/start-task 42`,
+`/open-pr`. Questions only the fund can answer become draft cards titled
+`Decision: …`.
+
+**Working from the parent `Sanadoq` folder instead?** Skills still load, but
+the guard and the pre-approved commands live in each repo's
+`.claude/settings.json`, which Claude Code reads only from the folder it was
+started in. Copy them up once:
+
+```bash
+mkdir -p .claude && cp backend/.claude/parent-folder.settings.json .claude/settings.json
+```
 
 ## Rules everyone keeps
 

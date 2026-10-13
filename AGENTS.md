@@ -8,10 +8,21 @@ Read [README.md](README.md) before changing anything about the books — **How
 the books work** is the domain spec (programs, payers, ★ cells, arrears, the
 collection ratio, running totals, balance). Team workflow: [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## The protocol — every change, every time
+
+Any request that changes a tracked file — a feature, a fix, a rename, a doc
+edit, one line — goes through the **`work-protocol`** skill, whether or not
+the person mentions an issue or a branch. Load it before you start exploring
+for the task. You find the matching issue on the Sanadoq board or file one,
+branch from it, build, verify, open the PR and watch CI; the person only
+describes what they want, answers real questions, and reviews. Never edit
+on `master`.
+
 ## Load these skills
 
 | Before you…                                         | Load                                              |
 | --------------------------------------------------- | ------------------------------------------------- |
+| act on any request to change something              | `work-protocol` (it calls the three below)        |
 | write, review or move any backend file              | `backend-style`, then `sanadoq-backend` (overlay) |
 | start work on an issue                              | `start-task`                                      |
 | open a pull request                                 | `open-pr`                                         |
