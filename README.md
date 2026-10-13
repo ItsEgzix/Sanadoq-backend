@@ -10,6 +10,10 @@ contributor, another program, or a free-text name for someone who is in no
 directory at all. **Expenses** are a program's payouts, one sheet of lines
 (beneficiaries and purposes) with a cell per month.
 
+New to the project? Start with [CONTRIBUTING.md](CONTRIBUTING.md) — setup,
+the board, and how a change reaches production. Rules for code agents (and
+the skills they load) are in [AGENTS.md](AGENTS.md).
+
 ## Run it
 
 ```bash

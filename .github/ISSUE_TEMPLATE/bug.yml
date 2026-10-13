@@ -1,0 +1,42 @@
+name: Bug
+description: The API answers wrongly, refuses something it should allow, or a figure is off.
+labels: [bug]
+projects: [ItsEgzix/2]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This repository is **public**. Leave out real names, account numbers and
+        amounts from the books — describe the shape of the case instead
+        ("an enrollment made dormant in March, reactivated in June").
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened
+      description: The request (method and path), what came back (status, errorCode), and where — production or local.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should have happened
+      description: For a figure, the rule it breaks (README → How the books work).
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1.
+        2.
+  - type: dropdown
+    id: severity
+    attributes:
+      label: How bad is it?
+      options:
+        - "A figure is wrong in production, or the fund cannot work (P0)"
+        - "Wrong, but there is a workaround (P1)"
+        - "Minor (P2)"
+    validations:
+      required: true

@@ -1,0 +1,25 @@
+# Monthly, grouped, minor and patch only: one PR a month per ecosystem that CI
+# checks like any other. Majors (Prisma 8, Nest 12…) are planned work, filed on
+# the board, not a bot's PR.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    labels: [dependencies]
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    labels: [dependencies]
+    groups:
+      actions:
+        patterns: ['*']

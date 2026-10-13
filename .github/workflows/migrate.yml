@@ -1,0 +1,49 @@
+# Applies merged migrations to the production database (Neon).
+#
+# Runs when a push to master touches prisma/migrations/, and waits in the
+# `neon-production` environment until the owner approves it in the Actions tab.
+# DATABASE_URL is a secret of that environment only, so no pull request, no
+# other job and no developer machine ever holds the production credentials.
+#
+# Vercel deploys the same commit without waiting for this, so every migration
+# must work with the code already in production (expand → deploy → contract).
+name: Migrate production database
+
+on:
+  push:
+    branches: [master]
+    paths: ['prisma/migrations/**']
+  workflow_dispatch:
+
+# Never two at once; never cancel one that has started writing.
+concurrency:
+  group: migrate-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  migrate:
+    name: prisma migrate deploy
+    runs-on: ubuntu-latest
+    # Not "Production": that environment is Vercel's, for its deploy records.
+    environment: neon-production
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # Lists what is about to run. Exits non-zero while anything is pending,
+      # which is the normal case here.
+      - name: Pending migrations
+        run: npx prisma migrate status || true
+      - name: Apply
+        run: npx prisma migrate deploy
+      - name: Production matches schema.prisma
+        run: npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code

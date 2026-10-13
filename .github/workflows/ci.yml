@@ -1,0 +1,94 @@
+# What every pull request must pass before it can merge into master (the
+# branch ruleset requires both jobs by name — rename one there too).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+# A new push to the same PR makes the older run pointless.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Lint, types, unit tests, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      # `npm run lint` passes --fix; CI must fail on what it would have fixed.
+      - name: Lint
+        run: npx eslint "{src,apps,libs,test}/**/*.ts"
+      # Also the guard against 'src/...' alias imports, which crash Vercel.
+      - name: Types
+        run: npx tsc --noEmit
+      # Includes src/i18n/test/events.spec.ts: every code in en and ar.
+      - name: Unit tests
+        run: npm test -- --ci
+      - name: Build
+        run: npx nest build
+
+  database:
+    name: Migrations and e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Same major as Neon. Throwaway: it exists for this job only.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: sanadoq
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/sanadoq
+      # Not a secret: it signs tokens for a database that dies with the job.
+      JWT_SECRET: ci-only-signing-key-for-a-throwaway-database
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - name: Every migration opens with its comment block
+        run: |
+          status=0
+          for f in prisma/migrations/*/migration.sql; do
+            if ! head -n 1 "$f" | grep -q '^--'; then
+              echo "::error file=$f::A migration opens with a -- comment block: what, why, backfill, what breaks without it."
+              status=1
+            fi
+          done
+          exit $status
+      # Every migration in order, on an empty database — what a fresh Neon
+      # branch would get, and the proof the SQL runs at all.
+      - name: Apply migrations
+        run: npx prisma migrate deploy
+      # schema.prisma is edited by hand beside the SQL; this catches the two
+      # disagreeing (a column in one and not the other, a missing FK).
+      - name: schema.prisma matches the migrations
+        run: npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
+      - name: E2E (guard, pipe, filter, interceptor, route order)
+        run: npm run test:e2e -- --ci

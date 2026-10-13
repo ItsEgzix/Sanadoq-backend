@@ -1,0 +1,51 @@
+name: Feature or change
+description: Something the API should do that it does not do yet.
+labels: [feature]
+projects: [ItsEgzix/2]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This repository is **public**. Describe the rule, not the people: no real
+        names, account numbers or figures from the fund's workbook. Put specifics
+        in a frontend issue or a draft card on the board.
+  - type: textarea
+    id: what
+    attributes:
+      label: What and why
+      description: The problem, and who in the fund has it.
+    validations:
+      required: true
+  - type: textarea
+    id: criteria
+    attributes:
+      label: Acceptance criteria
+      description: A checklist someone else could verify.
+      placeholder: |
+        - [ ] …
+        - [ ] Error and success messages in English and Arabic
+    validations:
+      required: true
+  - type: dropdown
+    id: contract
+    attributes:
+      label: Does the frontend have to follow?
+      options:
+        - "No"
+        - "Yes — a response or request shape changes (label api-contract, open a frontend issue)"
+        - "Not sure yet"
+    validations:
+      required: true
+  - type: dropdown
+    id: migration
+    attributes:
+      label: Database change?
+      options:
+        - "No"
+        - "Yes — needs a migration"
+        - "Not sure yet"
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Files, links, the related frontend issue, open questions.
